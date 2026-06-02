@@ -4,7 +4,7 @@ mORMot2 transport provider for the [Horse](https://github.com/HashLoad/horse) we
 
 ## Status
 
-> **🚧 Under construction.** This repo is a scaffold. Implementation follows the blueprint at [`horse-provider-crosssocket/doc/building-a-mormot-provider.md`](https://github.com/freitasjca/horse-provider-crosssocket/blob/master/doc/building-a-mormot-provider.md) — read that first.
+> **🚧 Under construction.** This repo is a scaffold. Implementation follows the blueprint at [`horse-provider-mormot/doc/building-a-mormot-provider.md`](https://github.com/freitasjca/horse-provider-mormot/blob/master/doc/building-a-mormot-provider.md) — read that first.
 
 ## Activation
 
