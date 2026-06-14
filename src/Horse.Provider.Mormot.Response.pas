@@ -61,6 +61,7 @@ uses
 {$IF DEFINED(FPC)}
   Classes,
   SysUtils,
+  HTTPDefs,
 {$ELSE}
   System.Classes,
   System.SysUtils,

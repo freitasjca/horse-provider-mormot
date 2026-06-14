@@ -193,6 +193,7 @@ THorseContext.Reset
 | Aspect | mORMot2 | CrossSocket |
 |---|---|---|
 | I/O model | IOCP (Windows) / epoll (Linux) — same primitives | IOCP (Windows) / epoll (Linux) |
+| `TCP_NODELAY` | **Enabled by default** by `THttpServer` — no provider code needed | Set by the provider's `OnConnected` hook (`SetTcpNoDelay`) |
 | Thread pool | Built-in `THttpServer` thread pool (default 32) | Horse's own `THorseWorkerPool` (4–64 threads) |
 | OnRequest | Synchronous method-of-object called on a pool thread | Async closure; CrossSocket callback is on an IO thread |
 | `THorseWorkerPool` | **Not needed** — mORMot already pools threads per request | Required — CrossSocket's IO threads must not block |

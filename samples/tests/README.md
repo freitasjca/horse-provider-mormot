@@ -120,6 +120,37 @@ The single failure is always Test 10 (multi-value `Set-Cookie`) — a Horse core
 
 ---
 
+## Server backend — test both `THttpServer` and `THttpAsyncServer`
+
+The provider hosts one of two mORMot2 socket servers, chosen by
+`THorseMormotConfig.ServerKind` (`mskThreadPool` → `THttpServer`, the default;
+`mskAsync` → `THttpAsyncServer`). The test servers above use the default
+(thread-pool). Because both backends share the same routing, pool and
+request/response bridge, the **entire test matrix must pass identically on
+both** — so it doubles as the async regression check.
+
+To run the suite against the async backend, pick either:
+
+- **Compile-time:** add `HORSE_MORMOT_ASYNC` to the project's Conditional Defines
+  (Delphi: Project ▸ Options; Lazarus: `-dHORSE_MORMOT_ASYNC`) — set it
+  **project-wide**, not as a bare `{$DEFINE}` in the `.dpr`/`.lpr`, or the Config
+  unit won't see it. Rebuild and re-run the same client.
+- **Runtime:** change the test server's `THorse.Listen(TEST_PORT)` to
+  ```pascal
+  var LCfg := THorseMormotConfig.Default;
+  LCfg.ServerKind := mskAsync;
+  THorse.ListenWithConfig(TEST_PORT, LCfg);
+  ```
+  (add `Horse.Provider.Mormot.Config` to `uses`), rebuild and re-run.
+
+**Expected result is identical: `88 passed, 1 failed` (Test 10).** Any other
+delta between the two backends is a real bug in the async path, not the suite.
+
+> Tip: the bench server (`horse-provider-crosssocket/samples/bench/Servers/Mormot/`)
+> already exposes a `--async` switch for the same A/B under load.
+
+---
+
 ## Linux daemon: systemd unit template
 
 For shapes 5 (Delphi/LinuxDaemon) and 7 (Lazarus/Daemon):

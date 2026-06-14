@@ -3,13 +3,28 @@
 (*
   Horse mORMot2 Provider  (hardened)
   ====================================
-  High-performance HTTP transport for Horse using mORMot2's THttpServer.
+  High-performance HTTP transport for Horse using mORMot2's HTTP server stack.
+  Three interchangeable backends, selected by THorseMormotConfig.ServerKind:
+    mskThreadPool → THttpServer       (socket thread-pool — default)
+    mskAsync      → THttpAsyncServer  (non-blocking IOCP/epoll/kqueue)
+    mskHttpApi    → THttpApiServer    (Windows http.sys kernel-mode — WIN ONLY)
+  All share the OnRequest handler, so the entire request/response bridge is
+  identical across backends. mskThreadPool/mskAsync descend from
+  THttpServerSocketGeneric; mskHttpApi descends from THttpServerGeneric.
   Uses IOCP on Windows, epoll on Linux — same kernel primitives as CrossSocket.
 
   ── Architecture ────────────────────────────────────────────────────────────
-  mORMot's THttpServer manages its own thread pool (THorseMormotConfig.ThreadPool,
-  default 32 threads).  Each OnRequest callback runs synchronously on one of
+  mskThreadPool: THttpServer runs its own thread pool (THorseMormotConfig.
+  ThreadPool, default 32). Each OnRequest callback runs synchronously on one of
   those threads — no separate THorseWorkerPool is needed.
+  mskAsync: THttpAsyncServer runs a non-blocking event loop; ThreadPool then
+  sizes the async R/W threads (not a per-request concurrency cap).
+  mskHttpApi: THttpApiServer terminates HTTP in the Windows kernel (http.sys);
+  InternalListen calls AddUrl to register http://+:<port>/ (needs admin rights
+  or a one-time netsh urlacl) and uses its own WaitStarted. Windows-only —
+  selecting it elsewhere raises at Listen. ThreadPool sizes the API threads.
+  Backend is selectable at compile time via HORSE_MORMOT_ASYNC /
+  HORSE_MORMOT_HTTPAPI (Windows) or at runtime via THorseMormotConfig.ServerKind.
 
   ── Security hardening (mirrors CrossSocket provider) ───────────────────────
   [SEC-29] Validate-before-pool.
@@ -68,12 +83,18 @@ uses
   mormot.core.base,
   mormot.core.unicode,   // StringToUtf8 / Utf8ToString live here, not in mormot.core.base
   mormot.net.http,       // THttpServerRequestAbstract
-  mormot.net.server;     // THttpServer
+  mormot.net.server,     // THttpServer + THttpServerSocketGeneric (shared base)
+  mormot.net.async;      // THttpAsyncServer (mskAsync backend)
 
 type
   THorseProviderMormot = class(THorseProviderAbstract)
   private
-    class var FServer:         THttpServer;
+    // Common base of THttpServer, THttpAsyncServer AND THttpApiServer (http.sys)
+    // — holds whichever backend AConfig.ServerKind selects. OnRequest, Shutdown
+    // and the request-handler signature live on this base. (WaitStarted does NOT
+    // — its signature differs per family, so it is called per-branch on the
+    // concrete type inside InternalListen.)
+    class var FServer:         THttpServerGeneric;
     class var FPort:           Integer;
     class var FConfig:         THorseMormotConfig;
     class var FStopEvent:      TEvent;
@@ -198,7 +219,11 @@ class procedure THorseProviderMormot.InternalListen(
   const AConfig: THorseMormotConfig
 );
 var
-  LHandler: TMormotHandler;
+  LHandler:    TMormotHandler;
+  LSockServer: THttpServerSocketGeneric;
+  {$IFDEF MSWINDOWS}
+  LApiServer:  THttpApiServer;
+  {$ENDIF}
 begin
   // [SEC-32] Stop any running server before starting a new one
   if Assigned(FServer) then
@@ -213,16 +238,66 @@ begin
   LHandler := TMormotHandler.Create;
   FHandler := LHandler;
 
-  // THttpServer.Create(aPort, aOnStart, aOnStop, aProcessName, aThreadPoolCount)
-  FServer := THttpServer.Create(
-    StringToUtf8(IntToStr(APort)),
-    nil,
-    nil,
-    '',
-    AConfig.ThreadPool
-  );
+  // Select the backend. THttpServer / THttpAsyncServer share the
+  // THttpServerSocketGeneric.Create(port, onStart, onStop, name, threadPool)
+  // signature; THttpApiServer (http.sys) has a different constructor + AddUrl
+  // and is Windows-only, so it lives in its own {$IFDEF MSWINDOWS} branch.
+  case AConfig.ServerKind of
+    mskAsync:
+      begin
+        LSockServer := THttpAsyncServer.Create(
+          StringToUtf8(IntToStr(APort)), nil, nil, '', AConfig.ThreadPool);
+        FServer := LSockServer;
+      end;
+
+    mskHttpApi:
+      begin
+        {$IFDEF MSWINDOWS}
+        // http.sys kernel-mode server. AddUrl registers the listening prefix:
+        //   '' root + '+' strong wildcard ⇒ http://+:<port>/ (all host names).
+        // aRegisterUri=True asks http.sys to add the reservation, which needs
+        // Administrator rights OR a prior one-time, per-port:
+        //   netsh http add urlacl url=http://+:<port>/ user=<account>
+        // AddUrl returns an error code (0 = NO_ERROR) — it does NOT raise — so a
+        // non-admin / missing-urlacl failure would otherwise bind nothing and
+        // silently drop every request. Fail loudly with the fix in the message.
+        LApiServer := THttpApiServer.Create(
+          '', nil, nil, '', [], nil, AConfig.ThreadPool);
+        if LApiServer.AddUrl('', StringToUtf8(IntToStr(APort)), False, '+', True) <> 0 then
+        begin
+          FreeAndNil(LApiServer);
+          FreeAndNil(FHandler);
+          raise Exception.CreateFmt(
+            'http.sys AddUrl failed for http://+:%d/ — run as Administrator, or ' +
+            'pre-authorize once with: netsh http add urlacl url=http://+:%d/ user=<account>',
+            [APort, APort]);
+        end;
+        FServer := LApiServer;
+        {$ELSE}
+        FreeAndNil(FHandler);
+        raise Exception.Create(
+          'THorseMormotConfig.ServerKind = mskHttpApi (http.sys) is Windows-only');
+        {$ENDIF}
+      end;
+
+  else // mskThreadPool (default)
+    begin
+      LSockServer := THttpServer.Create(
+        StringToUtf8(IntToStr(APort)), nil, nil, '', AConfig.ThreadPool);
+      FServer := LSockServer;
+    end;
+  end;
+
   FServer.OnRequest := LHandler.Process;
-  FServer.WaitStarted(10);   // wait up to 10 s for server to bind
+
+  // WaitStarted is NOT on THttpServerGeneric and its signature differs per
+  // family — call it on the concrete type. (http.sys: WaitStarted: boolean.)
+  if AConfig.ServerKind = mskHttpApi then
+    {$IFDEF MSWINDOWS}
+    THttpApiServer(FServer).WaitStarted(10)
+    {$ENDIF}
+  else
+    THttpServerSocketGeneric(FServer).WaitStarted(10);   // wait up to 10 s to bind
 
   DoOnListen;
 
@@ -261,7 +336,11 @@ begin
   // [SEC-30] Wait for any in-flight ExecutePipeline calls to complete.
   // After FServer.Free, mORMot threads have stopped; FActiveRequests should
   // already be 0, but we honour the drain timeout for safety.
+  {$IF DEFINED(FPC)}
+  if InterlockedCompareExchange(FActiveRequests, 0, 0) > 0 then
+  {$ELSE}
   if TInterlocked.CompareExchange(FActiveRequests, 0, 0) > 0 then
+  {$ENDIF}
     if Assigned(FDrainEvent) then
       FDrainEvent.WaitFor(FConfig.DrainTimeoutMs);
 
@@ -326,7 +405,11 @@ begin
   {$ENDIF}
 
   // [SEC-30] Count this request for graceful-drain accounting
+  {$IF DEFINED(FPC)}
+  if InterlockedIncrement(FActiveRequests) = 1 then
+  {$ELSE}
   if TInterlocked.Increment(FActiveRequests) = 1 then
+  {$ENDIF}
     if Assigned(FDrainEvent) then
       FDrainEvent.ResetEvent;
 
@@ -415,7 +498,11 @@ begin
 
   finally
     // [SEC-30] Always decrement — even on validation reject or exception
+    {$IF DEFINED(FPC)}
+    if InterlockedDecrement(FActiveRequests) = 0 then
+    {$ELSE}
     if TInterlocked.Decrement(FActiveRequests) = 0 then
+    {$ENDIF}
       if Assigned(FDrainEvent) then
         FDrainEvent.SetEvent;
     {$IFDEF HORSE_MORMOT_TRACE} Trace(Format('DONE status=%d', [Result])); {$ENDIF}

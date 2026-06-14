@@ -158,25 +158,56 @@ mORMot's `THttpServer` already manages its own thread pool (`THorseMormotConfig.
 
 This simplification is safe and correct — but it means very slow route handlers can stall one of the 32 threads for the duration of the handler. Increase `THorseMormotConfig.ThreadPool` if you have handlers that block for long periods (DB queries, file I/O).
 
+The same applies in `mskAsync` mode (`THttpAsyncServer`): mORMot dispatches each `OnRequest` on one of its own threads, so `THorse.Execute` may still run synchronously and block — there is still no need for `THorseWorkerPool`. But because the async backend has *far fewer* threads than the thread-pool backend (sized for event-loop R/W, not per-request), a blocking handler is proportionally more costly. Keep handlers non-blocking under `mskAsync`, or stay on `mskThreadPool` for blocking workloads.
+
 ---
 
-## THttpServer constructor parameters
+## TCP_NODELAY — enabled by mORMot, no provider code
+
+mORMot's `THttpServer` sets `TCP_NODELAY` (Nagle disabled) on its sockets by default, so the
+provider adds **nothing** here. This is why mORMot was the one stack **immune** to the Linux/WSL
+loopback artifact where CrossSocket and Indy were pinned at a ~44 ms/request floor (~2 270 RPS) until
+they added `TCP_NODELAY` explicitly: on a keep-alive connection the small request/response ping-pong
+collides with the kernel's ~40 ms delayed-ACK timer unless Nagle is off. No action is needed for the
+mORMot provider; if you ever see that ~44 ms floor it is *not* this transport. (Background:
+`horse-provider-crosssocket/bench/results/bench-analysis-report.md` §7.5.)
+
+---
+
+## Server backend selection — `THttpServer` vs `THttpAsyncServer`
+
+`FServer` is typed as the shared base **`THttpServerSocketGeneric`**, so `InternalListen`
+instantiates whichever concrete backend `AConfig.ServerKind` selects. Both backends declare
+an **identical** `Create` signature (inherited from the base) and expose `OnRequest` /
+`WaitStarted` on the base, so everything after construction is backend-agnostic:
 
 ```pascal
-FServer := THttpServer.Create(
-  StringToUtf8(IntToStr(APort)),  // port as RawUtf8 string, e.g. '9000'
-  nil,                             // OnStart: TNotifyThreadEvent (unused)
-  nil,                             // OnStop:  TNotifyThreadEvent (unused)
-  '',                              // server process description (logging only)
-  AConfig.ThreadPool               // thread pool count (default 32)
-);
+case AConfig.ServerKind of
+  mskAsync:                         // THttpAsyncServer — mormot.net.async
+    FServer := THttpAsyncServer.Create(
+      StringToUtf8(IntToStr(APort)), nil, nil, '', AConfig.ThreadPool);
+else // mskThreadPool (default)     // THttpServer — mormot.net.server
+  FServer := THttpServer.Create(
+    StringToUtf8(IntToStr(APort)), nil, nil, '', AConfig.ThreadPool);
+end;
 FServer.OnRequest := LHandler.Process;
-FServer.WaitStarted(10);           // wait up to 10 s for the server to bind
+FServer.WaitStarted(10);            // wait up to 10 s for the server to bind
 ```
+
+Constructor parameter order (shared by both): port as `RawUtf8` (e.g. `'9000'`), `OnStart`,
+`OnStop` (both unused), process description (logging only), then `ServerThreadPoolCount`.
+
+`ServerThreadPoolCount` (fed from `AConfig.ThreadPool`, default 32) means **concurrent
+request slots** for `THttpServer`, but **async R/W event-loop threads** for
+`THttpAsyncServer` — size the latter like CPU cores, not client count.
+
+Selection is runtime (`Cfg.ServerKind := mskAsync` before `ListenWithConfig`) or compile-time
+(`HORSE_MORMOT_ASYNC` set project-wide flips `THorseMormotConfig.Default`). An explicit
+`ServerKind` always wins over the define. See the README "Server backend" section.
 
 `WaitStarted(10)` blocks until the server has bound to the port or 10 seconds have elapsed. Without this call, `Listen` may return before the port is actually listening, and the first request may get a connection-refused error.
 
-The `FServer.Free` call in `Stop` joins all mORMot worker threads before returning — it is safe to free `FHandler` immediately after.
+The `FServer.Free` call in `Stop` joins all mORMot worker threads before returning (true for both backends) — it is safe to free `FHandler` immediately after.
 
 ---
 
@@ -332,26 +363,48 @@ The `TMormotRequestBridge.Populate` method parses headers once into the `THorseR
 
 ---
 
-## http.sys alternative (Windows only)
+## http.sys backend — `mskHttpApi` (Windows only)
 
-Replacing `THttpServer` with `THttpApiServer` gives kernel-mode HTTP termination on Windows — comparable to IIS performance:
+`THttpApiServer` (http.sys, kernel-mode) is the **third** backend, selected by
+`THorseMormotConfig.ServerKind = mskHttpApi`. Unlike the two socket servers it descends
+straight from `THttpServerGeneric` (not `THttpServerSocketGeneric`) and is built differently,
+so `InternalListen` handles it in its own `{$IFDEF MSWINDOWS}` branch:
 
 ```pascal
-// In InternalListen, replace:
-FServer := THttpServer.Create(StringToUtf8(IntToStr(APort)), ...);
-
-// With:
-FServer := THttpApiServer.Create(False);   // False = not cloned
-THttpApiServer(FServer).AddUrl(
-  '/', StringToUtf8(IntToStr(APort)), True, '+');
+LApiServer := THttpApiServer.Create('', nil, nil, '', [], nil, AConfig.ThreadPool);
+if LApiServer.AddUrl('', StringToUtf8(IntToStr(APort)), False, '+', True) <> 0 then
+  // raise with the netsh urlacl remedy — never bind silently
+  ...
+FServer := LApiServer;          // FServer is the shared THttpServerGeneric base
+...
+THttpApiServer(FServer).WaitStarted(10);   // http.sys WaitStarted is function: boolean
 ```
 
-Both `THttpServer` and `THttpApiServer` inherit from `THttpServerGeneric` which exposes the same `OnRequest: TOnHttpServerRequest` property and the same `THttpServerRequestAbstract` type for callbacks. No changes to `TMormotHandler`, request/response bridges, or pool are needed.
+Key differences from the socket backends, all handled in the provider:
+- **Field type.** `FServer` is `THttpServerGeneric` (the only ancestor common to all three).
+  `OnRequest` and `Shutdown` are on that base; **`WaitStarted` is not** (its signature differs
+  per family), so it is called per-branch on the concrete type.
+- **Construction.** Different constructor (`QueueName`-first, no port arg) plus an `AddUrl`
+  call that registers `http://+:<port>/`. `'+'` is the strong wildcard (all host names).
+- **URL ACL / rights.** `AddUrl(..., aRegisterUri := True)` asks http.sys to add the
+  reservation, which needs Administrator rights **or** a one-time
+  `netsh http add urlacl url=http://+:<port>/ user=<account>`. `AddUrl` returns an error code
+  (it does not raise), so the provider checks it and raises with that remedy — it never binds
+  silently and drops requests.
+- **Windows-only.** `THttpApiServer` is `{$ifdef USEWININET}` in mORMot, so every reference is
+  inside `{$IFDEF MSWINDOWS}`. Selecting `mskHttpApi` on a non-Windows build raises at `Listen`.
+- **`ThreadPool`** sizes the http.sys API processing threads.
+
+`TMormotHandler`, the request/response bridges, and the pool are **unchanged** — http.sys
+delivers the same `THttpServerRequestAbstract` to `OnRequest` as the socket servers.
+
+Compile-time default: `HORSE_MORMOT_HTTPAPI` (Windows) in `THorseMormotConfig.Default`,
+taking precedence over `HORSE_MORMOT_ASYNC`. Runtime `Cfg.ServerKind := mskHttpApi` always wins.
 
 Consider http.sys when:
-- Deploying as a Windows Service behind IIS (port sharing via http.sys URL reservation)
-- Need kernel-mode SSL termination without managing certificates in the Delphi process
-- Need GZIP compression offloaded to the kernel
+- Deploying as a Windows Service alongside IIS (port sharing via http.sys URL reservation)
+- You want kernel-mode TLS termination managed by Windows, not the Delphi process
+- You want GZIP / kernel response caching offloaded to http.sys
 
 ---
 
@@ -386,4 +439,7 @@ Every file in `src/` carries `{$IF DEFINED(FPC)}{$MODE DELPHI}{$H+}{$ENDIF}` at 
 | `TWebRequest` / `TWebResponse` | `Web.HTTPApp` | `HTTPDefs` — types are `TRequest` / `TResponse` |
 | `GetContentLength` return type | `Int64` (Delphi 10.2+) or `Integer` (XE7) | `Integer` always |
 | Anonymous procedures | Supported | Supported in FPC 3.2+ `{$MODE DELPHI}` |
+| `TNextProc` (middleware 3rd param) | `TNextProc` is an anonymous-proc type — same as `TProc` | `TNextProc = procedure of object` ≠ `TProc = procedure` — always use `TNextProc` explicitly, never `TProc`, in middleware parameter lists |
 | Inline `var` | Delphi 10.3+ | Not supported — use `var` block |
+| FPC version required | N/A | FPC **3.2.0+** (stable, Lazarus 2.2+) — **no trunk needed** (unlike CrossSocket which requires FPC 3.3.1 for `{$MODESWITCH FUNCTIONREFERENCES}`) |
+| LazUtils package | Not needed | Must be added to project's Required Packages — mORMot2's Lazarus package depends on it (`Cannot find Masks` otherwise) |

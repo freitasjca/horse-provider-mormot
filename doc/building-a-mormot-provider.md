@@ -100,10 +100,62 @@ C:\lang\Repo\mORMot2\src\ui
 
 ### Lazarus / FPC setup
 
-1. Open `src/packages/lazarus/mormot2.lpk` in the Lazarus IDE
-2. Compile the package
-3. Install it (only needed for design-time components; the HTTP server works without installation)
-4. Add the same source paths to your project's search path
+> **Key difference from the CrossSocket provider:** mORMot2 supports FPC **3.2.0+** — the same stable release line that ships with Lazarus 2.2+. You do **not** need FPC 3.3.1 trunk (which is required by Delphi-Cross-Socket's `zLib.inc` for `{$MODESWITCH FUNCTIONREFERENCES}`). If you need the CrossSocket provider alongside mORMot, see `horse-provider-crosssocket/doc/installing-fpc-trunk-lazarus.md`.
+
+#### Step 1 — Compile mORMot2 package
+
+1. Open `mORMot2/src/packages/lazarus/mormot2.lpk` in the Lazarus IDE.
+2. Click **Compile** (Installation is only needed for design-time components — the HTTP server works with Compile only).
+
+#### Step 2 — Add LazUtils to your project
+
+mORMot2's Lazarus package depends on `LazUtils`. Add it to your project:
+
+- Project → Project Inspector → Required Packages → Add → select `LazUtils` → OK.
+
+Omitting this causes a "Cannot find Masks" compile error.
+
+#### Step 3 — Add source and linker search paths
+
+In Project Options → Compiler Options → Paths:
+
+**Other unit files (`-Fu`):**
+```
+<mORMot2>/src
+<mORMot2>/src/core
+<mORMot2>/src/net
+<mORMot2>/src/lib
+<horse>/src
+<horse-provider-mormot>/src
+```
+
+**Other linker options (`-Fl`) — static blob path:**
+```
+<mORMot2>/static/$(TargetCPU)-$(TargetOS)
+```
+This macro resolves at build time: `static/x86_64-win64` on 64-bit Windows FPC, `static/x86_64-linux` on Linux, etc. Download `mormot2static.7z` from the [mORMot2 releases page](https://github.com/synopse/mORMot2/releases/latest) and extract into `mORMot2/static/` before building.
+
+#### Step 4 — Add project define
+
+In Project Options → Compiler Options → Custom options, add:
+```
+-dHORSE_PROVIDER_MORMOT
+```
+
+#### Step 5 — FPC-specific code patterns
+
+All provider source files carry `{$IF DEFINED(FPC)}{$MODE DELPHI}{$H+}{$ENDIF}` at the top. When writing middleware or app code in `.lpr` files, add `{$MODE DELPHI}{$H+}` at the top of the program file.
+
+**Anonymous procedures (middleware):** FPC 3.2+ in `{$MODE DELPHI}` supports anonymous procedures, so Horse middleware can use the same anonymous-proc syntax as Delphi. However, the third `Next` parameter must be typed as `TNextProc`, not `TProc` — on FPC these are distinct types (`TNextProc = procedure of object`; `TProc = procedure`):
+
+```pascal
+// Correct — compiles on both Delphi and FPC
+THorse.Use(procedure(Req: THorseRequest; Res: THorseResponse; Next: TNextProc)
+  begin
+    Res.AddHeader('X-Custom', 'value');
+    Next;
+  end);
+```
 
 ### Verify installation
 
