@@ -137,6 +137,7 @@ Both providers use IOCP/epoll and a context object pool. Key differences:
 | Aspect | mORMot2 | CrossSocket |
 |---|---|---|
 | Thread pool | Built-in (32 threads by default) | `THorseWorkerPool` (4–64 Horse threads) |
+| `TCP_NODELAY` | Enabled by default (no provider code) | Set by the provider's `OnConnected` hook |
 | No external dependency | ✅ Pure Pascal | ❌ Delphi-Cross-Socket + CnPack |
 | Compiler support | Delphi 7+, FPC 3.2+ | Delphi 10.2+, FPC 3.2+ |
 | http.sys (Windows) | ✅ `THttpApiServer` (zero code change) | ❌ Not available |
