@@ -15,8 +15,8 @@ unit Horse.Provider.Mormot.Pool;
 
     PATCH-REQ-2 (Horse.Request.pas)
       procedure THorseRequest.Clear;
-      Resets all internal state.  Sets FBody := nil (safe, no-op for mORMot
-      since FBody is never assigned to a live stream on this path).
+      Resets all internal state. Frees FBody when a middleware assigned an
+      owned object through Req.Body(AObject), e.g. Horse.Jhonson JSON parsing.
 
     PATCH-RES-2 (Horse.Response.pas)
       procedure THorseResponse.Clear;

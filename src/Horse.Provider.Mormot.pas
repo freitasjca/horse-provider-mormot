@@ -246,7 +246,12 @@ begin
     mskAsync:
       begin
         LSockServer := THttpAsyncServer.Create(
-          StringToUtf8(IntToStr(APort)), nil, nil, '', AConfig.ThreadPool);
+          StringToUtf8(IntToStr(APort)), 
+          nil, 
+          nil, 
+          '', 
+          AConfig.ThreadPool
+        );
         FServer := LSockServer;
       end;
 
@@ -283,7 +288,12 @@ begin
   else // mskThreadPool (default)
     begin
       LSockServer := THttpServer.Create(
-        StringToUtf8(IntToStr(APort)), nil, nil, '', AConfig.ThreadPool);
+        StringToUtf8(IntToStr(APort)), 
+        nil,
+        nil, 
+        '', 
+        AConfig.ThreadPool
+      );
       FServer := LSockServer;
     end;
   end;

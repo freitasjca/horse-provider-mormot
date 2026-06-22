@@ -1,4 +1,4 @@
-unit Horse.Provider.Mormot.Response;
+﻿unit Horse.Provider.Mormot.Response;
 
 (*
   Horse mORMot Provider — Response Bridge
@@ -74,6 +74,9 @@ uses
   ;
 
 type
+
+  { TMormotResponseBridge }
+
   TMormotResponseBridge = class
   public
     /// Flush AHorseRes to ACtxt output fields.
@@ -91,6 +94,12 @@ type
     class function  BuildHeaders(
                             AHorseRes:     THorseResponse;
                       const AServerBanner: string): string;
+    class function TryReadBodyStream(
+                            AStream: TStream;
+                        out ABody: RawByteString;
+                      const AEmptyIsBody: Boolean): Boolean;
+    class procedure ReleaseRawResponseContentStream(
+                            ARaw: {$IF DEFINED(FPC)}TResponse{$ELSE}TWebResponse{$ENDIF});
     class function  WriteBody(
                             AHorseRes:   THorseResponse;
                       const ACtxt:       THttpServerRequestAbstract;
@@ -263,6 +272,61 @@ begin
   Result := LHeaders;
 end;
 
+class function TMormotResponseBridge.TryReadBodyStream(AStream: TStream; out
+  ABody: RawByteString; const AEmptyIsBody: Boolean): Boolean;
+var
+  LSize: Int64;
+  LRead: Integer;
+begin
+  Result := False;
+  ABody := '';
+
+  if not Assigned(AStream) then
+    Exit;
+
+  LSize := AStream.Size;
+
+  if LSize <= 0 then
+  begin
+    Result := AEmptyIsBody;
+    Exit;
+  end;
+
+  if LSize > High(Integer) then
+    raise Exception.CreateFmt('Response body stream too large: %d bytes', [LSize]);
+
+  AStream.Position := 0;
+
+  SetLength(ABody, Integer(LSize));
+  LRead := AStream.Read(ABody[1], Integer(LSize));
+
+  if LRead <> Integer(LSize) then
+    SetLength(ABody, LRead);
+
+  Result := True;
+end;
+
+class procedure TMormotResponseBridge.ReleaseRawResponseContentStream(
+  ARaw: {$IF DEFINED(FPC)}TResponse{$ELSE}TWebResponse{$ENDIF});
+var
+  LStream: TStream ;
+begin
+  LStream := nil;
+  if not Assigned(ARaw) then
+    Exit;
+
+  LStream := ARaw.ContentStream;
+  if not Assigned(LStream) then
+    Exit;
+
+  if ARaw.FreeContentStream then
+  begin
+    ARaw.FreeContentStream := False;
+    ARaw.ContentStream := nil;
+    LStream.Free;
+  end;
+end;
+
 // ── WriteBody ─────────────────────────────────────────────────────────────────
 class function TMormotResponseBridge.WriteBody(
         AHorseRes: THorseResponse;
@@ -274,17 +338,19 @@ var
   LContent: string;
   LRaw:     {$IF DEFINED(FPC)}TResponse{$ELSE}TWebResponse{$ENDIF};
 begin
-  // ContentStream — PATCH-RES-4 shadow field
-  Stream := AHorseRes.ContentStream;
-  if Assigned(Stream) and (Stream.Size > 0) then
-  begin
-    Stream.Position := 0;
-    SetLength(Result, Stream.Size);
-    Stream.Read(Result[1], Stream.Size);
-    Exit;
-  end;
+  Result := '';
 
-  // BodyText — PATCH-RES-4 shadow field
+  // Status with empty body.
+  if ((AStatus >= 100) and (AStatus < 200)) or
+     (AStatus = 204) or
+     (AStatus = 304) then
+    Exit;
+
+  // ContentStream — PATCH-RES-4 shadow field.
+  if TryReadBodyStream(AHorseRes.ContentStream, Result, True) then
+    Exit;
+
+  // BodyText — PATCH-RES-4 shadow field.
   if AHorseRes.BodyText <> '' then
   begin
     Result := StringToUtf8(AHorseRes.BodyText);
@@ -295,13 +361,27 @@ begin
   LRaw := AHorseRes.RawWebResponse;
   if Assigned(LRaw) then
   begin
+    Stream := LRaw.ContentStream;
+
+    if TryReadBodyStream(Stream, Result, False) then
+    begin
+      ReleaseRawResponseContentStream(LRaw);
+      Exit;
+    end;
+
     LContent := LRaw.Content;
     if LContent <> '' then
     begin
       Result := StringToUtf8(LContent);
       Exit;
     end;
-  end;
+
+    if TryReadBodyStream(Stream, Result, True) then
+    begin
+      ReleaseRawResponseContentStream(LRaw);
+      Exit;
+    end;
+    end;
 
   // Status >= 400 with no body: send status code as minimal text body.
   // Without a body, some HTTP stacks may not deliver the response reliably.

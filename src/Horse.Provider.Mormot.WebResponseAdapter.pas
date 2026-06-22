@@ -50,6 +50,7 @@ implementation
 constructor TMormotWebResponse.Create(const ACtxt: THttpServerRequestAbstract);
 begin
   inherited Create(TMormotRawResponse.Create(ACtxt));
+  FreeContentStream := True;
 end;
 
 end.
