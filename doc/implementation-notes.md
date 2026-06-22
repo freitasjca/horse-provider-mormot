@@ -62,24 +62,31 @@ THorseRequest.Clear → FBody := nil  (already nil — no-op, no free)
 
 ---
 
-## Multipart upload stream ownership — `[FOLLOW-UP-MEM-1]`
+## Multipart upload stream ownership — `[FOLLOW-UP-MEM-1]` (RESOLVED — PATCH-PARAM-1)
 
-A second ownership divergence appears in multipart/form-data handling. Horse's `THorseCoreParam.AddStream(AKey, AStream)` (Horse.Core.Param.pas:120) writes the stream into `FFiles: TDictionary<string, TStream>` — and that dictionary is a **plain `TDictionary`, not a `TObjectDictionary([doOwnsValues])`**. `THorseCoreParam.Destroy` does `FreeAndNil(FFiles)`, which frees the dictionary structure but leaves the `TStream` values orphaned.
+Multipart/form-data file parts have to be handed to Horse as a `TStream`, and
+the two providers differ in **who owns that stream**. This was once a leak on the
+mORMot side; it is now resolved by an ownership-aware `AddStream`. Background and
+resolution below.
 
-### CrossSocket sidesteps the issue
+### The ownership divergence
+
+**CrossSocket — the stream has an external owner.**
 
 ```
 ICrossHttpRequest.Body : THttpMultiPartFormData (when multipart)
       │  THttpMultiPartFormData owns the per-part streams
       │
-ContentFields.AddStream(Field.Name, Field.Value)   ← non-owning pointer
+ContentFields.AddStream(Field.Name, Field.Value, AOwnsStream := False)
       │
 TCrossHttpRequest.Destroy → THttpMultiPartFormData.Destroy → frees the streams
 ```
 
-CrossSocket can pass a non-owning pointer into Horse because the streams have an external owner — `THttpMultiPartFormData` — whose lifetime is tied to the request itself. Horse's FFiles holds a borrowed reference, no leak.
+CrossSocket passes a **non-owning** pointer into Horse: the streams are owned by
+`THttpMultiPartFormData`, whose lifetime is tied to the request. Horse must not
+free them — it holds a borrowed reference.
 
-### mORMot has no equivalent owner
+**mORMot — the bridge synthesises the stream, no external owner.**
 
 ```
 mormot.core.buffers.MultiPartFormDataDecode → TMultiPartDynArray
@@ -87,66 +94,62 @@ mormot.core.buffers.MultiPartFormDataDecode → TMultiPartDynArray
       │  No TStream object exists. No owning aggregate exists.
       │
 TMormotRequestBridge.PopulateMultipartFields:
-      │
-      │  for each part with FileName <> '':
       │    LStream := TMemoryStream.Create;       ← synthesised by the bridge
       │    LStream.WriteBuffer(part.Content, …);
-      │    ContentFields.AddStream(part.Name, LStream);
-      │
-      │  → FFiles now holds LStream
-      │  → THorseRequest.Clear → ContentFields.Destroy → FreeAndNil(FFiles)
-      │  → LStream is LEAKED. FFiles is freed, but its TStream value isn't.
+      │    ContentFields.AddStream(part.Name, LStream, AOwnsStream := True)
 ```
 
-The bridge has to materialise a `TMemoryStream` because the test handler (and any realistic file-upload handler) reads via `Req.ContentFields.Field('file').AsStream`, which dispatches through `NewField → FFiles.TryGetValue` (Horse.Core.Param.pas:132). Routing through the string-dictionary path would corrupt non-UTF-8 binary payloads via `Utf8ToString`, so the stream path is the only correct choice — but it leaks the stream descriptor on every multipart upload.
+The bridge must materialise a `TMemoryStream` because handlers read the upload
+via `Req.ContentFields.Field('file').AsStream` (dispatched through `NewField →
+FFiles.TryGetValue`). Routing file bytes through the string-dictionary path would
+corrupt non-UTF-8 binary payloads via `Utf8ToString`, so the stream path is the
+only correct choice. But that synthesised stream has **no external owner** — so
+something in Horse has to free it.
 
-### Current state
+### The fix — ownership flag on `AddStream` (PATCH-PARAM-1)
 
-The leak is tagged `[FOLLOW-UP-MEM-1]` in a comment block inside `TMormotRequestBridge.PopulateMultipartFields` in `Horse.Provider.Mormot.Request.pas`. The behaviour is functionally correct (test 12 — POST /upload — passes) but each multipart-with-file request leaks one `TMemoryStream` of upload bytes until the process exits. On a server taking, say, 10 file uploads per second with 1 MB payloads, that is ~10 MB/s of accumulating memory — unsustainable for production deployments. For development, tests, and low-throughput services it is tolerable.
+Originally `THorseCoreParam.AddStream` stored the stream in a plain
+`FFiles: TDictionary<string, TStream>` that owned nothing, so the mORMot-synthesised
+`TMemoryStream` leaked one descriptor (object + buffer) on every multipart upload.
 
-Plain text form fields are not affected — they go through the string-dictionary path and don't allocate a stream.
-
-### The two proper fixes
-
-**Option 1 — Pool-side tracking (local to mORMot provider, recommended near-term).**
-
-Extend the pool's per-request bookkeeping with a stream tracker that the bridge populates and `Reset` drains. Approximate shape:
+`Horse.Core.Param.pas` now exposes an ownership-aware overload:
 
 ```pascal
-// Horse.Provider.Mormot.Pool.pas
-type
-  THorseContext = class
-  private
-    FRequest:        THorseRequest;
-    FResponse:       THorseResponse;
-    FUploadStreams:  TList<TStream>;   // bridge-allocated multipart streams
-  public
-    procedure TrackUploadStream(AStream: TStream);
-    procedure Reset;   // frees every stream in FUploadStreams, then clears it
-  end;
+function AddStream(const AKey: string; const AContent: TStream): THorseCoreParam; overload;                          // non-owning (default)
+function AddStream(const AKey: string; const AContent: TStream; const AOwnsStream: Boolean): THorseCoreParam; overload;
 ```
 
-The bridge then calls `LContext.TrackUploadStream(LStream)` after every `ContentFields.AddStream`, and `Pool.Reset` frees the streams before the request is returned to the pool. No upstream Horse changes required, ~15 lines.
+When `AOwnsStream = True`, the stream is tracked in a parallel
+`FOwnedStreams: TObjectList<TStream>` (owns objects). `Clear` (pool recycle) and
+`Destroy` free the owned streams; `FFiles` stays the non-owning lookup dictionary
+it always was. The 2-arg overload delegates with `False`, so **every pre-existing
+caller keeps its exact previous behaviour**.
 
-**Option 2 — Horse upstream patch (correct long-term, broader impact).**
+This is the symmetric resolution across providers:
 
-Change `Horse.Core.Param.pas` line 124 from:
+| Provider | Call | Owner of the stream | Outcome |
+|---|---|---|---|
+| **mORMot** | `AddStream(name, LStream, True)` | Horse (synthesised, no other owner) | freed on `Clear`/`Destroy` — no leak |
+| **CrossSocket** | `AddStream(name, Field.Value, False)` | `THttpMultiPartFormData` | left untouched — no double-free |
+| **Indy** | `AddStream(name, Files[I].Stream)` → `False` | `TWebRequest` | left untouched — unchanged |
 
-```pascal
-FFiles := TDictionary<string, TStream>.Create;
-```
+Note this is deliberately **not** the rejected "make `FFiles` a
+`TObjectDictionary([doOwnsValues])`" approach — that would force ownership on
+*every* caller and double-free CrossSocket's transport-owned streams. The
+per-call-site flag (default non-owning) gets the same cleanup for mORMot without
+touching the others.
 
-to:
+Plain text form fields are unaffected either way — they go through the
+string-dictionary path and never allocate a stream.
 
-```pascal
-FFiles := TObjectDictionary<string, TStream>.Create([doOwnsValues]);
-```
+### Verification
 
-Single-line change, but it alters the ownership contract of every existing call to `AddStream` across every provider (Indy, CrossSocket, mORMot, plus any third-party). The CrossSocket bridge currently passes a non-owning pointer that would now be double-freed. Indy's file-upload behaviour would need re-examination. Worth pursuing as an upstream PR once the affected call sites are audited; until then, Option 1 is safer.
-
-### Why this is documented here, not fixed inline
-
-The Test 12 fix (synthesise `TMemoryStream`, hand to `AddStream`) was made urgent by the need to pass a green test before further work. The leak is a known correctness regression for production but doesn't block the test suite. Tracking it in this doc keeps it visible without inflating the immediate change set. The matching source comment (`[FOLLOW-UP-MEM-1]`) ensures `grep` from either side finds the full context.
+`POST /upload` in the param/multipart test suite exercises this path. After the
+fix the mORMot server's shutdown leak report is clean (previously one
+`TMemoryStream` per upload); CrossSocket was — and remains — leak-free. The
+matching source comment is tagged `[FOLLOW-UP-MEM-1 — RESOLVED by PATCH-PARAM-1]`
+in `TMormotRequestBridge.PopulateMultipartFields` so `grep` from either side
+finds the full context.
 
 ---
 

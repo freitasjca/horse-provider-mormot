@@ -37,3 +37,4 @@ modules/
 # Editor / agent state
 .claude/
 CLAUDE.md
+*.log

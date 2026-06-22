@@ -448,21 +448,19 @@ begin
       // string-dictionary path would route through Utf8ToString, which
       // corrupts non-UTF-8 binary uploads.
       //
-      // [FOLLOW-UP-MEM-1] Ownership gap: Horse.Core.Param's FFiles is a plain
-      // TDictionary<string, TStream> with no doOwnsValues — destruction frees
-      // the dict but not the stream values. CrossSocket sidesteps this because
-      // its multipart streams are owned by THttpMultiPartFormData (freed with
-      // the ICrossHttpRequest). mORMot's MultiPartFormDataDecode produces
-      // inline RawByteString content with no owning object, so we synthesise
-      // a TMemoryStream here and accept that it leaks until the pool is torn
-      // down. Proper fix: extend the pool's Reset cycle to track and free
-      // bridge-allocated streams, or push a Horse upstream patch making FFiles
-      // a TObjectDictionary([doOwnsValues]).
+      // [FOLLOW-UP-MEM-1 — RESOLVED by PATCH-PARAM-1] mORMot's
+      // MultiPartFormDataDecode produces inline RawByteString content with no
+      // owning object, so we synthesise a TMemoryStream here.  Earlier this
+      // stream leaked because Horse.Core.Param's FFiles dictionary did not own
+      // its values.  AddStream(..., AOwnsStream=True) now transfers ownership
+      // to THorseCoreParam, which frees the stream on Clear (pool recycle) and
+      // Destroy.  CrossSocket still passes False — its multipart streams are
+      // owned by THttpMultiPartFormData and must not be freed here.
       LStream := TMemoryStream.Create;
       if Length(LParts[I].Content) > 0 then
         LStream.WriteBuffer(Pointer(LParts[I].Content)^, Length(LParts[I].Content));
       LStream.Position := 0;
-      AHorseReq.ContentFields.AddStream(LName, LStream);
+      AHorseReq.ContentFields.AddStream(LName, LStream, {AOwnsStream=}True);
 
       // Sibling text entries so Req.ContentFields['file_filename'] /
       // ['file_contenttype'] also resolve — mirrors the existing pattern that
