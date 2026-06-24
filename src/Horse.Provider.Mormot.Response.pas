@@ -61,13 +61,15 @@ uses
 {$IF DEFINED(FPC)}
   Classes,
   SysUtils,
+  Generics.Collections,
   HTTPDefs,
 {$ELSE}
   System.Classes,
   System.SysUtils,
   System.Generics.Collections,
 {$ENDIF}
-  Horse.Response
+  Horse.Response,
+  Horse.Core.Cookie
 {$IF NOT DEFINED(FPC)}
   , Web.HTTPApp
 {$ENDIF}
@@ -223,6 +225,7 @@ var
   LRaw:      {$IF DEFINED(FPC)}TResponse{$ELSE}TWebResponse{$ENDIF};
   I:         Integer;
   LName, LVal: string;
+  LCookie:   THorseCookie;
 {$IF NOT DEFINED(FPC)}
   Pair: TPair<string, string>;
 {$ENDIF}
@@ -268,6 +271,15 @@ begin
         EmitHeader(LHeaders, LName, LVal);
     end;
   end;
+
+  // PATCH-COOKIE-1 — one Set-Cookie line per typed cookie (RFC 6265 §3).
+  // OutCustomHeaders is CRLF-joined, so repeated Set-Cookie lines are preserved.
+  // ToHeaderValue is validated by THorseCookie; SanitiseHeaderValue is
+  // defence-in-depth CRLF stripping.
+  if Assigned(AHorseRes.Cookies) then
+    for LCookie in AHorseRes.Cookies do
+      LHeaders := LHeaders + 'Set-Cookie: ' +
+        SanitiseHeaderValue(LCookie.ToHeaderValue) + #13#10;
 
   Result := LHeaders;
 end;
