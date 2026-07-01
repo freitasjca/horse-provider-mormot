@@ -224,10 +224,20 @@ var
   {$IFDEF MSWINDOWS}
   LApiServer:  THttpApiServer;
   {$ENDIF}
+  LTls:    TNetTlsContext;
+  LUseTls: Boolean;
 begin
   // [SEC-32] Stop any running server before starting a new one
   if Assigned(FServer) then
     Stop;
+
+  // TLS is unsupported on the http.sys backend (certs bind at the OS level via
+  // netsh add sslcert) — reject early, before any allocation.
+  if AConfig.SSLEnabled and (AConfig.ServerKind = mskHttpApi) then
+    raise Exception.Create(
+      'THorseMormotConfig.SSLEnabled is not supported on the mskHttpApi (http.sys) ' +
+      'backend — bind the certificate at the OS level with: ' +
+      'netsh http add sslcert ipport=0.0.0.0:<port> certhash=<thumbprint> appid={<guid>}');
 
   FConfig := AConfig;
   FPort   := APort;
@@ -246,12 +256,7 @@ begin
     mskAsync:
       begin
         LSockServer := THttpAsyncServer.Create(
-          StringToUtf8(IntToStr(APort)), 
-          nil, 
-          nil, 
-          '', 
-          AConfig.ThreadPool
-        );
+          StringToUtf8(IntToStr(APort)), nil, nil, '', AConfig.ThreadPool);
         FServer := LSockServer;
       end;
 
@@ -288,17 +293,37 @@ begin
   else // mskThreadPool (default)
     begin
       LSockServer := THttpServer.Create(
-        StringToUtf8(IntToStr(APort)), 
-        nil,
-        nil, 
-        '', 
-        AConfig.ThreadPool
-      );
+        StringToUtf8(IntToStr(APort)), nil, nil, '', AConfig.ThreadPool);
       FServer := LSockServer;
     end;
   end;
 
   FServer.OnRequest := LHandler.Process;
+
+  // ── TLS [SEC-TLS-1] ─────────────────────────────────────────────────────────
+  // Build a mORMot TNetTlsContext from the SSL* config fields and hand it to the
+  // socket server's WaitStarted overload, which loads the cert/key into the
+  // OpenSSL context at bind time. TLS applies to the socket backends only; the
+  // http.sys backend binds its certificate at the OS level (netsh add sslcert),
+  // so SSLEnabled + mskHttpApi is rejected early at the top of InternalListen.
+  LUseTls := AConfig.SSLEnabled and (AConfig.ServerKind <> mskHttpApi);
+  if LUseTls then
+  begin
+    // Server=True ⇒ require CertificateFile/PrivateKeyFile; without mutual auth
+    // InitNetTlsContext leaves IgnoreCertificateErrors True (server presents its
+    // cert, does not demand one from the client) — that is one-way HTTPS.
+    InitNetTlsContext(LTls, {Server=}True,
+      AConfig.SSLCertFile, AConfig.SSLPrivKeyFile,
+      StringToUtf8(AConfig.SSLPassPhrase), AConfig.SSLCACertFile);
+    if AConfig.SSLVerifyPeer then
+    begin
+      // Mutual TLS: demand a client cert and verify it against CACertificatesFile.
+      LTls.ClientCertificateAuthentication := True;
+      LTls.IgnoreCertificateErrors         := False;
+    end;
+    if AConfig.SSLCipherList <> '' then
+      LTls.CipherList := StringToUtf8(AConfig.SSLCipherList);
+  end;
 
   // WaitStarted is NOT on THttpServerGeneric and its signature differs per
   // family — call it on the concrete type. (http.sys: WaitStarted: boolean.)
@@ -306,6 +331,8 @@ begin
     {$IFDEF MSWINDOWS}
     THttpApiServer(FServer).WaitStarted(10)
     {$ENDIF}
+  else if LUseTls then
+    THttpServerSocketGeneric(FServer).WaitStarted(10, @LTls)  // bind with TLS
   else
     THttpServerSocketGeneric(FServer).WaitStarted(10);   // wait up to 10 s to bind
 
