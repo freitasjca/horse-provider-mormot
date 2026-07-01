@@ -158,6 +158,7 @@ The table below maps each public Horse API surface to the mORMot mechanism that 
 | `Res.ContentType(ct)` | Writes to `FCSContentType` shadow field; bridge reads via `CSContentType` | PATCH-RES-4 |
 | `Res.Status(code)` | Writes to `FCSStatusCode` shadow field; bridge reads via `Status` | PATCH-RES-4 |
 | `Res.AddHeader(n,v)` | Writes to `FCustomHeaders` dict/list; bridge emits via `BuildHeaders` | PATCH-RES-1/3 |
+| `Res.Cookie(n,v)` / `Res.AddCookie(c)` | Kept in `THorseResponse.Cookies` (typed RFC 6265 list); `BuildHeaders` appends **one `Set-Cookie: …` line per cookie** to `OutCustomHeaders` (CRLF-joined, so multiple are preserved). All attributes including `Max-Age` round-trip. | PATCH-COOKIE-1 |
 | `Res.SendFile(path)` | Writes to `FCSContentStream`; bridge reads via `ContentStream` | PATCH-RES-4 |
 | `Res.RawWebResponse` | `TMormotWebResponse` adapter — non-nil always on mORMot path | PATCH-RES-6 |
 | `Res.RawWebResponse.SetCustomHeader(n,v)` | Writes to `TInterfacedWebResponse.CustomHeaders: TStrings`; bridge reads via COMPAT-1 | PATCH-RES-6 |

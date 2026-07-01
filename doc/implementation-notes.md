@@ -214,6 +214,52 @@ The `FServer.Free` call in `Stop` joins all mORMot worker threads before returni
 
 ---
 
+## TLS / HTTPS — `TNetTlsContext` + `WaitStarted` [SEC-TLS-1]
+
+TLS is enabled entirely through `WaitStarted`'s optional TLS overload — there is no
+separate "HTTPS server" type. `InternalListen` builds a stack-local `TNetTlsContext`
+from the `THorseMormotConfig.SSL*` fields and passes its address:
+
+```pascal
+LUseTls := AConfig.SSLEnabled and (AConfig.ServerKind <> mskHttpApi);
+if LUseTls then
+begin
+  InitNetTlsContext(LTls, {Server=}True,
+    AConfig.SSLCertFile, AConfig.SSLPrivKeyFile,
+    StringToUtf8(AConfig.SSLPassPhrase), AConfig.SSLCACertFile);
+  if AConfig.SSLVerifyPeer then
+  begin
+    LTls.ClientCertificateAuthentication := True;   // demand a client cert (mTLS)
+    LTls.IgnoreCertificateErrors         := False;  // …and verify it against the CA
+  end;
+  if AConfig.SSLCipherList <> '' then
+    LTls.CipherList := StringToUtf8(AConfig.SSLCipherList);
+end;
+...
+THttpServerSocketGeneric(FServer).WaitStarted(10, @LTls);   // bind with TLS
+```
+
+Key points:
+
+- `TNetTlsContext` / `InitNetTlsContext` live in `mormot.net.sock` (already in the
+  implementation `uses`). The record is **stack-local** — it only needs to outlive the
+  `WaitStarted` call, which loads the cert/key into the OpenSSL context at bind time.
+- `InitNetTlsContext(..., Server=True, ...)` leaves `IgnoreCertificateErrors = True`
+  for one-way HTTPS (the server presents its cert but does not demand one). Setting
+  `SSLVerifyPeer` flips on `ClientCertificateAuthentication` and clears
+  `IgnoreCertificateErrors`, which is mORMot's mutual-TLS posture.
+- **Backend scope:** only the socket backends (`mskThreadPool`, `mskAsync`) take a
+  `TNetTlsContext`. `mskHttpApi` (http.sys) binds its certificate at the OS level
+  (`netsh http add sslcert`), so `SSLEnabled` + `mskHttpApi` is rejected early in
+  `InternalListen` with a message pointing at the `netsh` command.
+- OpenSSL must be loadable at runtime (dynamic `libssl`/`libcrypto`, or the
+  `mormot2static` static link). Without it, `WaitStarted` fails to bind TLS.
+
+Covered by `tests/HorseMormotTLSTestServer` / `…Client` (one-way + mutual TLS) — see
+`tests/TLS-TESTS.md`.
+
+---
+
 ## Loopback `RemoteIP` normalization (mORMot interop)
 
 `Horse.Provider.Mormot.pas` sets one mORMot2 global flag at unit initialization:

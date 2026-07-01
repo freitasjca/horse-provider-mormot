@@ -113,6 +113,33 @@ mORMot2 dynamically loads `libssl` / `libcrypto` at startup, OR statically links
 - **Windows dynamic:** ship `libssl-3-x64.dll` + `libcrypto-3-x64.dll` (or the 1.1.x equivalents) next to the `.exe` — not in `System32`.
 - **Static link:** preferred for Docker / air-gapped — use the OpenSSL `.o`/`.obj` shipped inside `mormot2static` and reference them via the same search-path that brings in zlib/sqlite.
 
+### Enabling HTTPS / TLS
+
+`THorseMormotConfig` carries the TLS surface (mirroring the CrossSocket / ICS
+providers). The provider builds a mORMot `TNetTlsContext` from these fields and
+passes it to `THttpServerSocketGeneric.WaitStarted(sec, @tls)`:
+
+```pascal
+var
+  Cfg: THorseMormotConfig;
+begin
+  Cfg := THorseMormotConfig.Default;
+  Cfg.SSLEnabled     := True;
+  Cfg.SSLCertFile    := 'server.crt';
+  Cfg.SSLPrivKeyFile := 'server.key';
+  // mutual TLS (optional):
+  Cfg.SSLCACertFile  := 'ca.crt';
+  Cfg.SSLVerifyPeer  := True;          // require + verify a client certificate
+  THorseProviderMormot.ListenWithConfig(9443, Cfg);
+end;
+```
+
+- TLS applies to the **socket backends** — `mskThreadPool` (default) and
+  `mskAsync`. The `mskHttpApi` (http.sys) backend binds its certificate at the OS
+  level (`netsh http add sslcert`), so `SSLEnabled` raises a clear error there.
+- See [`tests/TLS-TESTS.md`](tests/TLS-TESTS.md) for the one-way + mutual-TLS
+  integration test (`HorseMormotTLSTestServer` / `…Client`).
+
 ### Lazarus / FPC IDE setup
 
 > **Key difference from the CrossSocket provider:** mORMot2 supports FPC **3.2.0+** and does not need FPC 3.3.1 trunk. FPC 3.2.2 stable (Lazarus 2.2+) is sufficient.

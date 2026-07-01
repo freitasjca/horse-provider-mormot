@@ -69,6 +69,40 @@ type
     // Default: ''
     ServerBanner:   string;
 
+    // ── TLS / mTLS ────────────────────────────────────────────────────────────
+    // Mirrors the SSL surface of the CrossSocket / ICS providers so the same
+    // mental model (and the same cert files) apply across all three transports.
+    // The provider builds a mORMot TNetTlsContext from these fields and passes it
+    // to THttpServerSocketGeneric.WaitStarted(sec, @tls). TLS is supported on the
+    // mskThreadPool and mskAsync (socket) backends; mskHttpApi (http.sys)
+    // configures TLS at the OS level (netsh add sslcert), NOT through these fields.
+
+    // Set True to listen on HTTPS. Requires SSLCertFile + SSLPrivKeyFile.
+    // Default: False
+    SSLEnabled:     Boolean;
+
+    // Path to the server certificate (PEM). Maps to TNetTlsContext.CertificateFile.
+    SSLCertFile:    string;
+
+    // Path to the server private key (PEM). Maps to TNetTlsContext.PrivateKeyFile.
+    SSLPrivKeyFile: string;
+
+    // Passphrase for an encrypted private key. Maps to TNetTlsContext.PrivatePassword.
+    SSLPassPhrase:  string;
+
+    // CA bundle used to verify client certificates (mutual TLS). Optional —
+    // required only when SSLVerifyPeer is True. Maps to TNetTlsContext.CACertificatesFile.
+    SSLCACertFile:  string;
+
+    // Require + verify a client certificate (mutual TLS). When True, sets
+    // TNetTlsContext.ClientCertificateAuthentication and leaves
+    // IgnoreCertificateErrors False so unauthenticated peers are rejected.
+    // Default: False
+    SSLVerifyPeer:  Boolean;
+
+    // OpenSSL cipher list. Empty → mORMot/OpenSSL default. Maps to TNetTlsContext.CipherList.
+    SSLCipherList:  string;
+
     class function Default: THorseMormotConfig; static;
   end;
 
@@ -93,6 +127,13 @@ begin
   Result.MaxHeaderCount := MORMOT_DEFAULT_MAX_HEADER_COUNT;
   Result.DrainTimeoutMs := MORMOT_DEFAULT_DRAIN_TIMEOUT_MS;
   Result.ServerBanner   := '';
+  Result.SSLEnabled     := False;
+  Result.SSLCertFile    := '';
+  Result.SSLPrivKeyFile := '';
+  Result.SSLPassPhrase  := '';
+  Result.SSLCACertFile  := '';
+  Result.SSLVerifyPeer  := False;
+  Result.SSLCipherList  := '';
 end;
 
 end.
