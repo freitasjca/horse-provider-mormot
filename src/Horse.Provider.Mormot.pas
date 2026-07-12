@@ -96,6 +96,11 @@ type
     // concrete type inside InternalListen.)
     class var FServer:         THttpServerGeneric;
     class var FPort:           Integer;
+    // Bind host set by the Listen overload family (upstream 2026-07 sync).
+    // '' or '0.0.0.0' = all interfaces. On the socket backends a specific
+    // host becomes mORMot's 'host:port' aPort syntax; the http.sys backend
+    // ignores it (binds all hostnames via the '+' wildcard prefix).
+    class var FHost:           string;
     class var FConfig:         THorseMormotConfig;
     class var FStopEvent:      TEvent;
     class var FRunning:        Boolean;
@@ -105,6 +110,8 @@ type
 
     class function  GetPort: Integer; static;
     class procedure SetPort(const AValue: Integer); static;
+    // mORMot aPort string for the socket backends: '8080' or 'host:8080'.
+    class function  BindAddr(const APort: Integer): RawUtf8; static;
 
     // [SEC-31] Minimal structured error response without entering the pipeline
     class function SendError(
@@ -129,7 +136,14 @@ type
     class procedure Listen; overload; override;
 
     // ── Non-virtual convenience overloads ─────────────────────────────────
-    class procedure Listen(APort: Integer); reintroduce; overload;
+
+    // Listen overload family — signatures mirror the Console provider.
+    // Required since the 2026-07 upstream sync: Horse.Instance
+    // (THorseInstance.Listen) calls the 4-argument form directly.
+    class procedure Listen(const APort: Integer; const AHost: string = '0.0.0.0'; const ACallbackListen: TProc = nil; const ACallbackStopListen: TProc = nil); reintroduce; overload; static;
+    class procedure Listen(const APort: Integer; const ACallbackListen: TProc; const ACallbackStopListen: TProc = nil); reintroduce; overload; static;
+    class procedure Listen(const AHost: string; const ACallbackListen: TProc = nil; const ACallbackStopListen: TProc = nil); reintroduce; overload; static;
+    class procedure Listen(const ACallbackListen: TProc; const ACallbackStopListen: TProc = nil); reintroduce; overload; static;
     // `reintroduce` because the abstract base declares
     //   class procedure ListenWithConfig(APort: Integer;
     //     const AConfig: THorseCrossSocketConfig); virtual;
@@ -198,10 +212,47 @@ begin
   InternalListen(LPort, THorseMormotConfig.Default);
 end;
 
-// ── Listen(APort) ─────────────────────────────────────────────────────────────
-class procedure THorseProviderMormot.Listen(APort: Integer);
+// ── Listen overload family ────────────────────────────────────────────────────
+// Master overload: stores host + lifecycle callbacks, then starts with the
+// default config. DoOnListen (fired inside InternalListen) invokes the
+// just-set ACallbackListen; DoOnStopListen fires from StopListen.
+class procedure THorseProviderMormot.Listen(const APort: Integer; const AHost: string; const ACallbackListen, ACallbackStopListen: TProc);
 begin
+  FHost := AHost;
+  SetOnListen(ACallbackListen);
+  SetOnStopListen(ACallbackStopListen);
   InternalListen(APort, THorseMormotConfig.Default);
+end;
+
+class procedure THorseProviderMormot.Listen(const APort: Integer; const ACallbackListen, ACallbackStopListen: TProc);
+begin
+  Listen(APort, FHost, ACallbackListen, ACallbackStopListen);
+end;
+
+class procedure THorseProviderMormot.Listen(const AHost: string; const ACallbackListen, ACallbackStopListen: TProc);
+var
+  LPort: Integer;
+begin
+  LPort := FPort;
+  if LPort <= 0 then
+    LPort := DEFAULT_PORT;
+  Listen(LPort, AHost, ACallbackListen, ACallbackStopListen);
+end;
+
+class procedure THorseProviderMormot.Listen(const ACallbackListen, ACallbackStopListen: TProc);
+begin
+  Listen(FHost, ACallbackListen, ACallbackStopListen);
+end;
+
+// ── BindAddr — mORMot aPort string, optionally host-qualified ─────────────────
+// mORMot's aPort accepts '8080' (all interfaces) or 'host:8080' (specific bind)
+// — see mormot.net.server.pas 'ip:port' convention.
+class function THorseProviderMormot.BindAddr(const APort: Integer): RawUtf8;
+begin
+  if (FHost = '') or (FHost = '0.0.0.0') then
+    Result := StringToUtf8(IntToStr(APort))
+  else
+    Result := StringToUtf8(FHost + ':' + IntToStr(APort));
 end;
 
 // ── ListenWithConfig ──────────────────────────────────────────────────────────
@@ -256,7 +307,7 @@ begin
     mskAsync:
       begin
         LSockServer := THttpAsyncServer.Create(
-          StringToUtf8(IntToStr(APort)), nil, nil, '', AConfig.ThreadPool);
+          BindAddr(APort), nil, nil, '', AConfig.ThreadPool);
         FServer := LSockServer;
       end;
 
@@ -293,7 +344,7 @@ begin
   else // mskThreadPool (default)
     begin
       LSockServer := THttpServer.Create(
-        StringToUtf8(IntToStr(APort)), nil, nil, '', AConfig.ThreadPool);
+        BindAddr(APort), nil, nil, '', AConfig.ThreadPool);
       FServer := LSockServer;
     end;
   end;
