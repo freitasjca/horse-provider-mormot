@@ -73,6 +73,7 @@ type
     function  GetContentLength: Integer;
 {$IFEND}
     function  GetFieldByName(const AName: string): string;
+    procedure PopulateHeaders(ADest: TStrings);
     procedure PopulateQueryFields(ADest: TStrings);
     procedure PopulateContentFields(ADest: TStrings);
     procedure PopulateCookieFields(ADest: TStrings);
@@ -195,6 +196,29 @@ begin
     if LEnd = 0 then
       LEnd := Length(LHeaders) - LValStart + 2;
     Result := Trim(Copy(LHeaders, LValStart, LEnd - 1));
+  end;
+end;
+
+procedure TMormotRawRequest.PopulateHeaders(ADest: TStrings);
+var
+  LLines: TStringList;
+  LLine:  string;
+  LColon: Integer;
+begin
+  { Consumer (THorseCoreParamHeader.GetHeadersList) sets ADest.NameValueSeparator
+    before calling — ':' on Delphi, '=' on FPC — so honour it here. }
+  LLines := TStringList.Create;
+  try
+    LLines.Text := Utf8ToString(FCtxt.InHeaders);
+    for LLine in LLines do
+    begin
+      LColon := Pos(':', LLine);
+      if LColon = 0 then Continue;
+      ADest.Add(Trim(Copy(LLine, 1, LColon - 1)) + ADest.NameValueSeparator +
+        Trim(Copy(LLine, LColon + 1, MaxInt)));
+    end;
+  finally
+    LLines.Free;
   end;
 end;
 

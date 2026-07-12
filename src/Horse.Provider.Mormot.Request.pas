@@ -68,11 +68,10 @@ uses
 {$ENDIF}
   Horse.Request,
   Horse.Commons,
-  Horse.Provider.Mormot.WebRequestAdapter
-{$IF NOT DEFINED(FPC)}
-  , Web.HTTPApp
-{$ENDIF}
-  ;
+  Horse.Provider.Mormot.WebRequestAdapter;
+  // TMethodType lives in Horse.Commons on BOTH compilers since the 2026-07
+  // upstream sync — do not add Web.HTTPApp here, its TMethodType would
+  // shadow Horse.Commons' enum and break THorseRequest.Populate with E2010.
 
 const
   // [SEC-13]
