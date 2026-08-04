@@ -1,6 +1,6 @@
 ## Additive changes to support mORMot2 high-performance provider
 
-> This provider and the accompanying Horse patches use the same fork patches already submitted with the CrossSocket provider PR ([horse-provider-crosssocket](https://github.com/freitasjca/horse-provider-crosssocket)). If that PR has been merged, no additional Horse-level changes are required. The mORMot provider is an independent transport option that sits beside CrossSocket — both providers use the same hybrid adapter architecture and the same Horse fork patches.
+> This provider requires **[HashLoad/horse ≥ 3.3.0](https://github.com/HashLoad/horse/releases/tag/v3.3.0)** — the first official release that includes `IHorseRawRequest` / `IHorseRawResponse`, `HORSE_PROVIDER_*` define normalization (PATCH-HORSE-2), and all other Horse-level changes required by the hybrid adapter architecture. No fork of Horse is needed. The mORMot provider is an independent transport option that sits beside the CrossSocket provider — both use the same hybrid adapter architecture.
 
 ---
 
@@ -8,7 +8,7 @@
 
 We have developed a new provider for Horse, [horse-provider-mormot](https://github.com/freitasjca/horse-provider-mormot), that replaces the Indy transport layer with [mORMot2](https://github.com/synopse/mORMot2). This brings **IOCP/epoll async I/O**, **security hardening** (pre-pipeline validation, active-request drain tracking, structured JSON errors, double-start guard) and **broad compiler support** including FPC 3.2+ and Delphi 7 through 12.3 Athens.
 
-The provider uses the **same Horse fork patches** as the CrossSocket provider. All existing Horse projects, providers, and official middlewares continue to compile and run without any changes.
+All required Horse changes are included in **HashLoad/horse ≥ 3.3.0**. All existing Horse projects, providers, and official middlewares continue to compile and run without any changes.
 
 ---
 
@@ -165,9 +165,9 @@ All official Horse middlewares work without source changes:
 
 ---
 
-### Required Horse patches
+### Required Horse changes (included in HashLoad/horse ≥ 3.3.0)
 
-The mORMot provider requires the same Horse fork patches as the CrossSocket provider. If the CrossSocket PR has been merged, no additional changes are needed. For completeness:
+All of the following are present in the official HashLoad/horse 3.3.0 release — no fork is needed. Listed for completeness:
 
 #### `Horse.Request.pas`
 
@@ -286,8 +286,8 @@ For projects using `boss install`:
 {
   "name": "my-horse-mormot-server",
   "dependencies": {
-    "horse": "github.com/freitasjca/horse",
-    "horse-provider-mormot": "github.com/freitasjca/horse-provider-mormot"
+    "github.com/HashLoad/horse": ">=3.3.0",
+    "github.com/freitasjca/horse-provider-mormot": ">=1.0.7"
   }
 }
 ```

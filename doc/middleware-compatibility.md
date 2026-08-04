@@ -1,6 +1,6 @@
 # Middleware Compatibility — `horse-provider-mormot`
 
-Per-middleware compatibility matrix for the mORMot2 provider. "Compatible" means the middleware source code requires no changes — the provider supplies the required surfaces via the Horse fork patches and the hybrid adapter architecture.
+Per-middleware compatibility matrix for the mORMot2 provider. "Compatible" means the middleware source code requires no changes — the provider supplies the required surfaces via the hybrid adapter architecture (included in HashLoad/horse ≥ 3.3.0).
 
 The mORMot provider uses the same `IHorseRawRequest` / `IHorseRawResponse` hybrid adapter pattern as the CrossSocket provider. Any middleware that works on CrossSocket via that pattern also works here.
 

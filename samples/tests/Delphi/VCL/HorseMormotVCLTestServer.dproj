@@ -3,7 +3,7 @@
         <ProjectGuid>{31EAF53B-C18D-4F8B-90E1-CB793CD5FC77}</ProjectGuid>
         <MainSource>HorseMormotVCLTestServer.dpr</MainSource>
         <Base>True</Base>
-        <Config Condition="'$(Config)'==''">Debug</Config>
+        <Config Condition="'$(Config)'==''">Release</Config>
         <ProjectName Condition="'$(ProjectName)'==''">HorseMormotVCLTestServer</ProjectName>
         <TargetedPlatforms>168065</TargetedPlatforms>
         <AppType>Application</AppType>
