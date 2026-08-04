@@ -74,6 +74,7 @@ uses
   System.SyncObjs,
 {$ENDIF}
   Horse.Exception,
+  Horse.Proc,
   Horse.Provider.Abstract,
   Horse.Provider.Mormot.Config,
   Horse.Provider.Mormot.Pool,

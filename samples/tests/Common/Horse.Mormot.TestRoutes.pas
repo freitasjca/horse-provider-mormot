@@ -376,6 +376,34 @@ begin
     end
   );
 
+  // ── Streaming — mORMot2 does not support pull-model chunked streaming ─────
+  // These 501 stubs let a shared test client probe provider capability without
+  // hanging: 501 signals "not implemented on this transport" (PATCH-STREAM-1
+  // is CrossSocket-only).
+  THorse.Get('/stream/pull',
+    procedure(Req: THorseRequest; Res: THorseResponse)
+    begin
+      Res.Status(501).ContentType('application/json; charset=utf-8')
+         .Send('{"error":"chunked streaming not implemented on mORMot2 transport"}');
+    end
+  );
+
+  THorse.Get('/stream/content-type',
+    procedure(Req: THorseRequest; Res: THorseResponse)
+    begin
+      Res.Status(501).ContentType('application/json; charset=utf-8')
+         .Send('{"error":"chunked streaming not implemented on mORMot2 transport"}');
+    end
+  );
+
+  THorse.Get('/stream/empty',
+    procedure(Req: THorseRequest; Res: THorseResponse)
+    begin
+      Res.Status(501).ContentType('application/json; charset=utf-8')
+         .Send('{"error":"chunked streaming not implemented on mORMot2 transport"}');
+    end
+  );
+
 end;
 
 end.

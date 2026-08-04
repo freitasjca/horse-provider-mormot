@@ -3,7 +3,7 @@
         <ProjectGuid>{8DE57135-65BD-4489-9A04-ACE8005F506B}</ProjectGuid>
         <MainSource>HorseMormotLinuxDaemonTestServer.dpr</MainSource>
         <Base>True</Base>
-        <Config Condition="'$(Config)'==''">Debug</Config>
+        <Config Condition="'$(Config)'==''">Release</Config>
         <ProjectName Condition="'$(ProjectName)'==''">HorseMormotLinuxDaemonTestServer</ProjectName>
         <TargetedPlatforms>168065</TargetedPlatforms>
         <AppType>Console</AppType>

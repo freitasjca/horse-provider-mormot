@@ -23,7 +23,7 @@ begin
 end.
 ```
 
-`HORSE_PROVIDER_MORMOT` is reserved in `patches/horse/src/Horse.pas` (PATCH-HORSE-2 three-axis define model). No legacy alias.
+`HORSE_PROVIDER_MORMOT` is supported by the PATCH-HORSE-2 three-axis define model, included in [HashLoad/horse ≥ 3.3.0](https://github.com/HashLoad/horse). No legacy alias.
 
 ## Server backend — thread-pool / async / http.sys
 
@@ -90,7 +90,7 @@ Define precedence in `THorseMormotConfig.Default`: `HORSE_MORMOT_HTTPAPI` (Windo
 | **Delphi** | 10.4 Sydney | `inline var`, `System.Threading` — same baseline as Horse. |
 | **Lazarus / FPC** | **3.2.0** | Unlike the CrossSocket provider (which needs FPC **3.3.1 trunk** for `{$MODESWITCH FUNCTIONREFERENCES}`), mORMot2 has no such requirement. FPC **3.2.2 stable + Lazarus 2.2+** work out of the box. See [Lazarus / FPC IDE setup](#lazarus--fpc-ide-setup) below. |
 | **mORMot2** | latest | Core units: `mormot.core.base`, `mormot.core.unicode`, `mormot.net.http`, `mormot.net.server`. |
-| **Horse** | ≥ 3.1.98 | The PATCH-HORSE-2 release — older versions lack the `HORSE_PROVIDER_*` namespace. |
+| **Horse** | ≥ 3.3.0 | First official release with `HORSE_PROVIDER_*` namespace (PATCH-HORSE-2) built in. |
 | **OpenSSL** | 1.1.x or 3.x | *Only if HTTPS is enabled.* |
 
 ### mORMot2 static blobs
