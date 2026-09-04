@@ -1,4 +1,4 @@
-﻿program HorseMormotLinuxDaemonTestServer;
+program HorseMormotLinuxDaemonTestServer;
 
 (*
   Horse + mORMot2 Provider — Integration Test Server (Delphi · Linux daemon shape)

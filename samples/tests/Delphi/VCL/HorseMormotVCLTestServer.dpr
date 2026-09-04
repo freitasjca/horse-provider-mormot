@@ -1,4 +1,4 @@
-﻿program HorseMormotVCLTestServer;
+program HorseMormotVCLTestServer;
 
 (*
   Horse + mORMot2 Provider — Integration Test Server (Delphi · VCL shape)

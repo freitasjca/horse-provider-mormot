@@ -1,4 +1,4 @@
-﻿program HorseMormotTestServer;
+program HorseMormotTestServer;
 
 {
   Horse + mORMot2 Provider — Integration Test Server (Delphi · Console shape)

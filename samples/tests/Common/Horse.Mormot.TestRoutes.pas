@@ -404,6 +404,32 @@ begin
     end
   );
 
+  // ── FIX-BODYBYTES-1: Res.Send(TBytes) must reach the client ───────────────
+  // Horse core's Send(const AContent: TBytes) stores into the FCSBodyBytes
+  // shadow slot (public property BodyBytes) whenever FWebResponse is nil —
+  // which is every non-WebBroker provider, this one included.
+  // TMormotResponseBridge.WriteBody read ContentStream, BodyText and
+  // RawWebResponse but never BodyBytes, so the response fell through to an
+  // empty Result: HTTP 200 with no payload, no exception, nothing logged.
+  //
+  // Confirmed by control on the CrossSocket suite, whose bridge had the
+  // identical gap: with the fix reverted the equivalent test reports
+  // "status 200" PASS and "body is not empty" FAIL [len=0]. That is why the
+  // client asserts the body content and not merely the status — a status-only
+  // check passes against the broken build and proves nothing.
+  //
+  // ASCII payload so the client's string-typed Body compares exactly. Byte
+  // fidelity is not at risk on this provider: WriteBody returns RawByteString,
+  // which is 8-bit, so the bytes pass through verbatim (unlike ICS, whose
+  // string-typed body cannot carry binary at all).
+  THorse.Get('/body/bytes',
+    procedure(Req: THorseRequest; Res: THorseResponse)
+    begin
+      Res.ContentType('application/octet-stream');
+      Res.Send(TEncoding.UTF8.GetBytes('BODYBYTES-OK-0123456789'));
+    end
+  );
+
 end;
 
 end.

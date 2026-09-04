@@ -1,7 +1,7 @@
 {
   "name": "horse-provider-mormot",
   "description": "mORMot2 transport provider for the Horse web framework. HTTP server based on Synopse mORMot2 (THttpServer, IOCP/epoll). Hybrid-interface architecture — implements IHorseRawRequest / IHorseRawResponse so Horse middleware works unchanged.",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "homepage": "https://github.com/freitasjca/horse-provider-mormot",
   "license": "MIT",
   "mainsrc": "src/",
