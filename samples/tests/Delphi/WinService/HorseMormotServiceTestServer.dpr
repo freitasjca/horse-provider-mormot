@@ -1,7 +1,7 @@
 program HorseMormotServiceTestServer;
 
 {
-  Horse + mORMot2 Provider � Integration Test Server (Delphi � Windows Service)
+  Horse + mORMot2 Provider — Integration Test Server (Delphi · Windows Service)
   ==============================================================================
 
   Project type: Service Application (File - New - Other - Service Application).
@@ -26,8 +26,10 @@ program HorseMormotServiceTestServer;
 }
 
 uses
+  System.SysUtils,
   Vcl.SvcMgr,
-  MyHorseService in 'MyHorseService.pas' {HorseCSTestService: TService},
+  MyHorseMormotService in 'MyHorseMormotService.pas' {HorseMormotTestService: TService},
+  Horse.Mormot.TestRoutes in '..\..\Common\Horse.Mormot.TestRoutes.pas',
   Horse.Provider.Mormot.Config in '..\..\..\..\src\Horse.Provider.Mormot.Config.pas',
   Horse.Provider.Mormot.Daemon in '..\..\..\..\src\Horse.Provider.Mormot.Daemon.pas',
   Horse.Provider.Mormot in '..\..\..\..\src\Horse.Provider.Mormot.pas',
@@ -39,18 +41,49 @@ uses
   Horse.Provider.Mormot.VCL in '..\..\..\..\src\Horse.Provider.Mormot.VCL.pas',
   Horse.Provider.Mormot.WebRequestAdapter in '..\..\..\..\src\Horse.Provider.Mormot.WebRequestAdapter.pas',
   Horse.Provider.Mormot.WebResponseAdapter in '..\..\..\..\src\Horse.Provider.Mormot.WebResponseAdapter.pas',
-  Horse.Mormot.TestRoutes in '..\..\Common\Horse.Mormot.TestRoutes.pas';
+  Horse.Provider.RawAdapters in '..\..\..\..\src\Horse.Provider.RawAdapters.pas',
+  Horse.Provider.RawInterfaces in '..\..\..\..\src\Horse.Provider.RawInterfaces.pas';
 
-{$R *.RES}
+{$R *.res}
 
 begin
-  // The standard Delphi Service Application boilerplate. The service class
-  // (declared in MyHorseService.pas) inherits from THorseCrossSocketService
-  // which inherits from Vcl.SvcMgr.TService.
-  // Windows 2003 Server requires StartServiceCtrlDispatcher to be
+  // -- Phase 1: process is alive, before any VCL/SCM machinery ---------------
+  try
+    WriteDiag('==================================================');
+    WriteDiag(Format('Process launched — CmdLine="%s"', [CmdLine]));
+    WriteDiag(Format('Exe="%s"', [ParamStr(0)]));
+  except
+    // never let diagnostic logging itself crash the launch
+  end;
 
-  if not Application.DelayInitialize or Application.Installing then
-    Application.Initialize;
-  Application.CreateForm(THorseMormotTestService, HorseMormotTestService);
-  Application.Run;
+  try
+    // -- Phase 2: standard Vcl.SvcMgr boilerplate --------------------------
+    if not Application.DelayInitialize or Application.Installing then
+    begin
+      WriteDiag('Calling Application.Initialize');
+      Application.Initialize;
+      WriteDiag('Application.Initialize returned');
+    end
+    else
+      WriteDiag('Skipping Application.Initialize (delayed)');
+
+    WriteDiag('Calling Application.CreateForm');
+    Application.CreateForm(THorseMormotTestService, HorseMormotTestService);
+    WriteDiag('Application.CreateForm returned');
+
+    // Note: neither Vcl.SvcMgr.TServiceApplication nor TService exposes an
+    // OnException event. Exception coverage is provided by:
+    //   - the outer try/except below (catches main-thread exceptions in
+    //     Application.Initialize / CreateForm / Run / StartServiceCtrlDispatcher)
+    //   - try/except inside MyStart / MyStop in MyHorseMormotService.pas
+    //   - try/except inside ServiceCreate in MyHorseMormotService.pas
+
+    WriteDiag('Calling Application.Run (StartServiceCtrlDispatcher)');
+    Application.Run;
+    WriteDiag('Application.Run returned — process exiting cleanly');
+  except
+    on E: Exception do
+      WriteDiag(Format('UNHANDLED EXCEPTION in main: %s: %s',
+        [E.ClassName, E.Message]));
+  end;
 end.
