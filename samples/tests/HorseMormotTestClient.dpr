@@ -1,4 +1,4 @@
-﻿program HorseMormotTestClient;
+program HorseMormotTestClient;
 
 {$APPTYPE CONSOLE}
 
@@ -874,6 +874,28 @@ begin
     LStreamAllOk, '');
   DoSync(AClient, 'GET', BASE_URL + '/ping', nil, nil, R);
   Check('server healthy after concurrent streaming probes',
+    (R.StatusCode = 200) and (R.Body = 'pong'),
+    Format('%d / %s', [R.StatusCode, R.Body]));
+
+  // ── 37  Res.Send(TBytes) — FIX-BODYBYTES-1 ───────────────────────────────────
+  // Horse core's Send(TBytes) writes the FCSBodyBytes shadow slot (public
+  // BodyBytes). TMormotResponseBridge.WriteBody read ContentStream, BodyText
+  // and RawWebResponse but never BodyBytes, so the response fell through to an
+  // empty Result — HTTP 200, no payload, no exception, nothing logged.
+  //
+  // The status check is deliberately NOT the assertion: a 200 was returned
+  // before the fix too. Verified on the CrossSocket suite, which had the same
+  // gap — reverting its bridge leaves "status 200" green and "body is not
+  // empty" red at len=0. The body comparison is what discriminates.
+  Section('37  GET /body/bytes  (FIX-BODYBYTES-1 — Res.Send(TBytes))');
+  DoSync(AClient, 'GET', BASE_URL + '/body/bytes', nil, nil, R);
+  Check('status 200', R.StatusCode = 200, IntToStr(R.StatusCode));
+  Check('body is not empty (the whole point — it used to be)',
+    R.Body <> '', Format('len=%d', [Length(R.Body)]));
+  Check('body matches the bytes the handler sent',
+    R.Body = 'BODYBYTES-OK-0123456789', R.Body);
+  DoSync(AClient, 'GET', BASE_URL + '/ping', nil, nil, R);
+  Check('server healthy after Send(TBytes)',
     (R.StatusCode = 200) and (R.Body = 'pong'),
     Format('%d / %s', [R.StatusCode, R.Body]));
 
