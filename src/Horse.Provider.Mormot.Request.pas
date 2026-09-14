@@ -120,6 +120,79 @@ const
     'GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'
   );
 
+// [FIX-DECODE-ONCE-1] Decode one application/x-www-form-urlencoded component
+// (a query or form key/value) exactly once, at store time.
+//
+// Every other Horse store path holds DECODED values -- Horse's own
+// InitializeQuery, WebBroker ContentFields, the CrossSocket bridge -- and with
+// the matching Horse fix THorseCoreParam no longer decodes on read. This
+// provider used to store the RAW text and rely on that read-time decode, which
+// left Field(...).AsString returning raw text and re-decoded on every repeated
+// indexed read.
+//
+// Tolerant on purpose, like Delphi-Cross-Socket: a malformed %xx is kept
+// literally instead of raising. This runs during request population, outside
+// any handler's try/except, so an exception here would turn a client typo into
+// a 500. Bytes that are not valid UTF-8 fall back to the raw text for the same
+// reason. A + is a space, per application/x-www-form-urlencoded.
+function DecodeFormComponent(const AValue: string): string;
+
+  function HexNibble(const AByte: Byte): Integer;
+  begin
+    case AByte of
+      Ord('0')..Ord('9'): Result := AByte - Ord('0');
+      Ord('a')..Ord('f'): Result := AByte - Ord('a') + 10;
+      Ord('A')..Ord('F'): Result := AByte - Ord('A') + 10;
+    else
+      Result := -1;
+    end;
+  end;
+
+var
+  LSrc: TBytes;
+  LDst: TBytes;
+  I, J: Integer;
+  LHi, LLo: Integer;
+begin
+  if (Pos('%', AValue) = 0) and (Pos('+', AValue) = 0) then
+    Exit(AValue);
+  LSrc := TEncoding.UTF8.GetBytes(AValue);
+  SetLength(LDst, Length(LSrc));
+  I := 0;
+  J := 0;
+  while I < Length(LSrc) do
+  begin
+    LHi := -1;
+    LLo := -1;
+    if (LSrc[I] = Ord('%')) and (I + 2 < Length(LSrc)) then
+    begin
+      LHi := HexNibble(LSrc[I + 1]);
+      LLo := HexNibble(LSrc[I + 2]);
+    end;
+    if (LHi >= 0) and (LLo >= 0) then
+    begin
+      LDst[J] := Byte((LHi shl 4) or LLo);
+      Inc(I, 3);
+    end
+    else if LSrc[I] = Ord('+') then
+    begin
+      LDst[J] := Ord(' ');
+      Inc(I);
+    end
+    else
+    begin
+      LDst[J] := LSrc[I];
+      Inc(I);
+    end;
+    Inc(J);
+  end;
+  try
+    Result := TEncoding.UTF8.GetString(LDst, 0, J);
+  except
+    Result := AValue;
+  end;
+end;
+
 { TMormotRequestBridge }
 
 // ── [SEC-15][SEC-17][SEC-12][SEC-16] Validation — called before pool acquire ──
@@ -328,7 +401,9 @@ begin
       if LKey = '' then Continue;
       if (Length(LKey) > MAX_QUERY_KEY_LEN) or         // [SEC-18]
          (Length(LVal) > MAX_QUERY_VALUE_LEN) then Continue;
-      AHorseReq.Query.Dictionary.AddOrSetValue(LKey, LVal);
+      // [FIX-DECODE-ONCE-1] store DECODED; limits above apply to the raw text
+      AHorseReq.Query.Dictionary.AddOrSetValue(
+        DecodeFormComponent(LKey), DecodeFormComponent(LVal));
     end;
   end;
 
@@ -383,8 +458,26 @@ begin
           LNextAmp := Length(LQuery) - LPos + 2;
         LPair := Copy(LQuery, LPos, LNextAmp - 1);
         LPos  := LPos + LNextAmp;
+        // [FIX-DECODE-ONCE-1] Split each pair into key and value, then decode
+        // both. This used to store the WHOLE "name=value" text as the key with
+        // an empty value, so Req.ContentFields['name'] always returned ''.
         if LPair <> '' then
-          AHorseReq.ContentFields.Dictionary.AddOrSetValue(LPair, '');
+        begin
+          LEqPos := Pos('=', LPair);
+          if LEqPos > 0 then
+          begin
+            LKey := Copy(LPair, 1, LEqPos - 1);
+            LVal := Copy(LPair, LEqPos + 1, MaxInt);
+          end
+          else
+          begin
+            LKey := LPair;
+            LVal := '';
+          end;
+          if LKey <> '' then
+            AHorseReq.ContentFields.Dictionary.AddOrSetValue(
+              DecodeFormComponent(LKey), DecodeFormComponent(LVal));
+        end;
       end;
     end;
   end

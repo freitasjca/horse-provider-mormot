@@ -76,6 +76,40 @@ end;
 
 { ── Route registration ───────────────────────────────────────────────────── }
 
+// [FIX-DECODE-ONCE-1] Read field "v" three ways and report each as JSON.
+// Field is read FIRST: it reads the dictionary directly, so it always shows the
+// value exactly as stored. The two indexed reads that follow show what
+// THorseCoreParam does to it -- and the second one sees whatever the first
+// wrote back. Each read catches its own exception, so one failing accessor
+// cannot hide what the others return. Same routine as the CrossSocket suite.
+function DecodeReport(const AParam: THorseCoreParam): string;
+var
+  LField: string;
+  LGet:   string;
+  LAgain: string;
+begin
+  try
+    LField := AParam.Field('v').AsString;
+  except
+    on E: Exception do
+      LField := 'EXCEPTION ' + E.ClassName + ': ' + E.Message;
+  end;
+  try
+    LGet := AParam['v'];
+  except
+    on E: Exception do
+      LGet := 'EXCEPTION ' + E.ClassName + ': ' + E.Message;
+  end;
+  try
+    LAgain := AParam['v'];
+  except
+    on E: Exception do
+      LAgain := 'EXCEPTION ' + E.ClassName + ': ' + E.Message;
+  end;
+  Result := '{"field":"' + JE(LField) + '","get":"' + JE(LGet)
+    + '","again":"' + JE(LAgain) + '"}';
+end;
+
 procedure RegisterTestRoutes;
 begin
 
@@ -427,6 +461,26 @@ begin
     begin
       Res.ContentType('application/octet-stream');
       Res.Send(TEncoding.UTF8.GetBytes('BODYBYTES-OK-0123456789'));
+    end
+  );
+
+  // ── FIX-DECODE-ONCE-1: query / form values are URL-decoded exactly once ─────
+  // Same routes as the CrossSocket suite. Client tests 41-45 assert that Field,
+  // [v] and [v]-again all return the once-decoded value. See the client for the
+  // expected failure counts per provider/Horse combination.
+  THorse.Get('/params/decode',
+    procedure(Req: THorseRequest; Res: THorseResponse)
+    begin
+      Res.ContentType('application/json; charset=utf-8')
+         .Send(DecodeReport(Req.Query));
+    end
+  );
+
+  THorse.Put('/params/decode-form',
+    procedure(Req: THorseRequest; Res: THorseResponse)
+    begin
+      Res.ContentType('application/json; charset=utf-8')
+         .Send(DecodeReport(Req.ContentFields));
     end
   );
 
