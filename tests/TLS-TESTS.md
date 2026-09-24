@@ -87,6 +87,57 @@ involved — check it first when a handshake fails.
 
 ## Run
 
+```
+run-tls-tests.bat
+```
+
+Runs both passes unattended and is the form to gate on: exit code **0** = all
+passed, **N** = N failed assertions, **2** = VOID — the suite did not actually
+run. It starts each server, waits for the port, runs the client, and kills the
+server by **PID**.
+
+Three things it refuses to do, each because the alternative produces a green
+result that means nothing:
+
+- **Start when the port is already held.** Windows lets a second process bind an
+  already-owned port without error, so the client could be answering to someone
+  else's server. It reports VOID and names the PID to stop.
+- **Kill by image name.** `HorseMormotTLSTestServer.exe` is 28 characters and
+  Windows truncates image names at 25, so `taskkill /IM` matches nothing and
+  still reports success — which is how a stale server survives into the next run.
+- **Test a transport that is not TLS.** It requires the server's
+  `TLS backend: OpenSSL` line before letting the client run. Before
+  FIX-MORMOT-TLS-1 this suite would have reported ALL PASSED against a server
+  speaking plain TCP, because T4 only asserts "not 200".
+
+Server output for each pass is kept in `bin/tls-oneway.log` and `bin/tls-mtls.log`.
+
+**To verify the VOID guard still works** — worth doing if you change the script,
+because a broken guard is invisible on a passing run. Start a server in its own
+terminal, **in the foreground**, and leave it there:
+
+```
+cd bin && HorseMormotTLSTestServer
+```
+
+Then in a second terminal, confirm the port is held before running the wrapper:
+
+```
+netstat -ano | findstr :9201
+run-tls-tests.bat
+```
+
+Expect `[VOID] port 9201 is already held by pid NNNN` and exit code 2.
+
+Do **not** set up the squatter with `start "" HorseMormotTLSTestServer` — a
+server started that way does not reliably outlive the command that launched it,
+so the port is free again by the time the wrapper looks and the run reports a
+perfectly ordinary pass. That is a **void test, not a passing one**, and it is
+indistinguishable from success unless the `netstat` above is checked first. It
+took four attempts to notice.
+
+### By hand
+
 **One-way TLS:**
 
 ```
