@@ -20,6 +20,11 @@ const
   MORMOT_DEFAULT_MAX_BODY_BYTES    = Int64(4) * 1024 * 1024;  // 4 MB
   MORMOT_DEFAULT_MAX_HEADER_COUNT  = 100;
   MORMOT_DEFAULT_DRAIN_TIMEOUT_MS  = 5000;
+  // mORMot's own default for THttpServerSocketGeneric.Create's KeepAliveTimeOut.
+  // Named here only because that parameter sits between ServerThreadPoolCount and
+  // ProcessOptions, so passing hsoEnableTls means restating it [FIX-MORMOT-TLS-1].
+  // Keep in step with the default in mormot.net.server.pas if it ever moves.
+  MORMOT_DEFAULT_KEEPALIVE_MS      = 30000;
 
 type
   // Selects which mORMot2 HTTP server backend the provider hosts.

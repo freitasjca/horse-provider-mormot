@@ -278,6 +278,7 @@ var
   {$ENDIF}
   LTls:    TNetTlsContext;
   LUseTls: Boolean;
+  LOpts:   THttpServerOptions;
 begin
   // [SEC-32] Stop any running server before starting a new one
   if Assigned(FServer) then
@@ -300,15 +301,40 @@ begin
   LHandler := TMormotHandler.Create;
   FHandler := LHandler;
 
+  // ── hsoEnableTls [FIX-MORMOT-TLS-1] ─────────────────────────────────────────
+  // This MUST be decided before the server is constructed, and it must reach the
+  // constructor — not the Options property.
+  //
+  // WaitStarted(sec, @tls) looks like the whole story, but mormot.net.server.pas
+  // opens its TLS setup with "if (hsoEnableTls in fOptions) and (TLS <> nil)".
+  // Without the option the TLS pointer is accepted and silently ignored: no
+  // exception, no log, and the server still reports itself bound. Every accepted
+  // connection then stays plain TCP — THttpServerSocket.Create only copies
+  // Sock.TLS.AcceptCert under the same option — so a client's TLS ClientHello is
+  // parsed as an HTTP request line and answered with a bare 400. That is exactly
+  // how this provider's TLS suite failed: every assertion returned 400 and it
+  // read as a routing fault rather than a transport that never spoke TLS.
+  //
+  // Constructor, not Options: THttpAsyncServer.Create translates hsoEnableTls
+  // into its own acoEnableTls inside the constructor body, so assigning Options
+  // afterwards would work for mskThreadPool and quietly fail for mskAsync.
+  LUseTls := AConfig.SSLEnabled and (AConfig.ServerKind <> mskHttpApi);
+  LOpts   := [];
+  if LUseTls then
+    LOpts := [hsoEnableTls];
+
   // Select the backend. THttpServer / THttpAsyncServer share the
-  // THttpServerSocketGeneric.Create(port, onStart, onStop, name, threadPool)
-  // signature; THttpApiServer (http.sys) has a different constructor + AddUrl
-  // and is Windows-only, so it lives in its own {$IFDEF MSWINDOWS} branch.
+  // THttpServerSocketGeneric.Create(port, onStart, onStop, name, threadPool,
+  // keepAliveTimeout, options) signature; THttpApiServer (http.sys) has a
+  // different constructor + AddUrl and is Windows-only, so it lives in its own
+  // {$IFDEF MSWINDOWS} branch. KeepAliveTimeOut is passed explicitly only
+  // because it sits between the thread-pool count and the options.
   case AConfig.ServerKind of
     mskAsync:
       begin
         LSockServer := THttpAsyncServer.Create(
-          BindAddr(APort), nil, nil, '', AConfig.ThreadPool);
+          BindAddr(APort), nil, nil, '', AConfig.ThreadPool,
+          MORMOT_DEFAULT_KEEPALIVE_MS, LOpts);
         FServer := LSockServer;
       end;
 
@@ -345,7 +371,8 @@ begin
   else // mskThreadPool (default)
     begin
       LSockServer := THttpServer.Create(
-        BindAddr(APort), nil, nil, '', AConfig.ThreadPool);
+        BindAddr(APort), nil, nil, '', AConfig.ThreadPool,
+        MORMOT_DEFAULT_KEEPALIVE_MS, LOpts);
       FServer := LSockServer;
     end;
   end;
@@ -358,7 +385,8 @@ begin
   // OpenSSL context at bind time. TLS applies to the socket backends only; the
   // http.sys backend binds its certificate at the OS level (netsh add sslcert),
   // so SSLEnabled + mskHttpApi is rejected early at the top of InternalListen.
-  LUseTls := AConfig.SSLEnabled and (AConfig.ServerKind <> mskHttpApi);
+  // LUseTls was decided above, before construction — hsoEnableTls has to be a
+  // constructor argument, and this context is inert without it [FIX-MORMOT-TLS-1].
   if LUseTls then
   begin
     // Server=True ⇒ require CertificateFile/PrivateKeyFile; without mutual auth
