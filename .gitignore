@@ -38,3 +38,6 @@ modules/
 .claude/
 CLAUDE.md
 *.log
+# TLS test build output (build-tls-dcc.bat)
+tests/bin/
+tests/temp/
