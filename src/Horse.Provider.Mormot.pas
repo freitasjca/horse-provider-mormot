@@ -134,6 +134,13 @@ type
   public
     // ── Overrides matching THorseProviderAbstract ──────────────────────────
     class procedure StopListen; override;
+
+    // [FIX-MORMOT-GRACEFUL-1] The override AGENTS.md makes mandatory for any
+    // provider owning the TCP socket. Without it this provider inherited
+    // THorseProviderAbstract's version, which discards ATimeoutMS and calls
+    // StopListen -> Stop, which frees the server BEFORE draining.
+    class procedure StopListenGraceful(const ATimeoutMS: Integer = 5000); override;
+
     class procedure Listen; overload; override;
 
     // ── Non-virtual convenience overloads ─────────────────────────────────
@@ -175,6 +182,30 @@ uses
   // DEFAULT_PORT in Listen() resolve to Horse's Integer 9000 as intended.
   Horse.Constants,
   Horse.Exception.Interrupted;
+
+var
+  // [FIX-MORMOT-GRACEFUL-1] Settle window between "no requests in flight" and
+  // teardown. DEFAULT 0: mORMot writes the reply synchronously in the request
+  // thread, so the reorder alone may be sufficient, and shipping a delay
+  // "just in case" would hide whether it is needed. Override with
+  // HORSE_MORMOT_SETTLE_MS to characterise the gap without a rebuild.
+  GGracefulSettleMs: Integer = -1;
+
+function GracefulSettleMs: Integer;
+var
+  LRaw: string;
+begin
+  if GGracefulSettleMs < 0 then
+  begin
+    LRaw := GetEnvironmentVariable('HORSE_MORMOT_SETTLE_MS');
+    if (LRaw = '') or not TryStrToInt(Trim(LRaw), GGracefulSettleMs)
+       or (GGracefulSettleMs < 0) then
+      GGracefulSettleMs := 0;
+  end;
+  Result := GGracefulSettleMs;
+end;
+
+
 
 // ── Internal handler object ────────────────────────────────────────────────────
 // mORMot's OnRequest is a method-of-object; we bridge to the class method.
@@ -436,6 +467,90 @@ class procedure THorseProviderMormot.StopListen;
 begin
   Stop;
   DoOnStopListen;
+end;
+
+// ── StopListenGraceful — [FIX-MORMOT-GRACEFUL-1] ─────────────────────────────
+// Stop is the problem and it is an ORDERING problem: it frees FServer first and
+// drains afterwards, which its own comment concedes ("After FServer.Free, mORMot
+// threads have stopped; FActiveRequests should already be 0"). Freeing the server
+// terminates its thread pool, so the free BLOCKS until the in-flight handler
+// returns — measured 717 ms for 700 ms of remaining work — and the handler then
+// has no server left to answer through. The reply is lost at exactly the moment
+// the handler finishes (1516 ms for a 1500 ms handler; 5014 ms for a 5000 ms one),
+// which is a different signature from ICS and CrossSocket, where the reply dies
+// at the instant shutdown begins.
+//
+// So the time was never the issue here — the ORDER was. This method drains while
+// the server is still alive to write the answer.
+//
+// mORMot supplies exactly the right first step, which CrossSocket does not have:
+// THttpServerGeneric.Shutdown sets fShutdownInProgress, and Request() then
+// answers HTTP_NOTFOUND to NEW requests while in-flight ones continue
+// untouched — no socket is closed. That is why this provider can do what the
+// CrossSocket fix had to leave out (there, closing the listener destroyed the
+// in-flight response body; see FIX-CS-GRACEFUL-1).
+//
+// The 404 for new work is mORMot's choice, not ours; 503 would be the better
+// answer and would have to come from ExecutePipeline via IsShuttingDown.
+class procedure THorseProviderMormot.StopListenGraceful(const ATimeoutMS: Integer);
+var
+  LTimeout: Integer;
+  LSettle:  Integer;
+begin
+  TriggerBeforeStop;
+  SetIsShuttingDown(True);
+  try
+    LTimeout := ATimeoutMS;
+    if LTimeout <= 0 then
+      LTimeout := FConfig.DrainTimeoutMs;
+
+    FRunning := False;
+
+    // 1. Refuse NEW requests. In-flight ones keep their thread and their socket.
+    if Assigned(FServer) then
+      FServer.Shutdown;
+
+    // 2. Let them finish and write their replies, bounded by the CALLER's
+    //    timeout — the number THorseProviderAbstract.StopListenGraceful throws
+    //    away and Stop replaces with FConfig.DrainTimeoutMs.
+    {$IF DEFINED(FPC)}
+    if InterlockedCompareExchange(FActiveRequests, 0, 0) > 0 then
+    {$ELSE}
+    if TInterlocked.CompareExchange(FActiveRequests, 0, 0) > 0 then
+    {$ENDIF}
+      if Assigned(FDrainEvent) then
+        FDrainEvent.WaitFor(LTimeout);
+
+    // 3. Settle window, DEFAULT 0 and deliberately so. mORMot writes the
+    //    response from the request thread after ExecutePipeline returns, and the
+    //    drain counter is decremented in that pipeline — so the counter can hit
+    //    zero a moment before mORMot has serialised the reply, the same gap
+    //    CrossSocket has. Whether it matters here is a measurement, not a guess:
+    //    this ships at 0 so the Shutdown-then-drain reorder is tested ALONE, and
+    //    HORSE_MORMOT_SETTLE_MS can add a window without a rebuild if the reply
+    //    still does not arrive. One variable at a time.
+    LSettle := GracefulSettleMs;
+    if LSettle > 0 then
+      Sleep(LSettle);
+
+    // 4. Only now tear down. This is where Stop begins.
+    if Assigned(FServer) then
+    begin
+      FreeAndNil(FServer);
+      FreeAndNil(FHandler);
+    end;
+
+    FreeAndNil(FDrainEvent);
+
+    // Unblock the main thread parked in InternalListen — last, so it wakes only
+    // once teardown is complete.
+    if Assigned(FStopEvent) then
+      FStopEvent.SetEvent;
+
+    DoOnStopListen;
+  finally
+    SetIsShuttingDown(False);
+  end;
 end;
 
 // ── Stop ──────────────────────────────────────────────────────────────────────
