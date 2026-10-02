@@ -160,6 +160,7 @@ HorseMormotTLSTestClient mtls    # terminal 2  → T3, T4 pass
 | one-way | T2 `POST /echo` → body echoed | request body survives the TLS path |
 | mTLS | T3 `GET /ping` **with** client cert → 200 | `ClientCertificateAuthentication` accepts a CA-signed cert |
 | mTLS | T4 `GET /ping` **without** client cert → rejected | mTLS is enforced (peer without cert refused) |
+| TLS 1.3 suites | S1 server `suites13` → **does not start**; its log shows the OpenSSL backend loaded AND names `SSLCipherSuitesTLS13` | mORMot2 cannot apply TLS 1.3 suites, so the provider refuses them (MORMOT-TLS13-SUITES-1, v1.0.11). Passes 1-2 are the control: the same server with the field empty starts and serves |
 
 The mTLS client certificate is injected by subclassing `TCrossHttpClient` and
 overriding `CreateHttpCli`.

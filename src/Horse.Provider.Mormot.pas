@@ -323,6 +323,18 @@ begin
       'backend — bind the certificate at the OS level with: ' +
       'netsh http add sslcert ipport=0.0.0.0:<port> certhash=<thumbprint> appid={<guid>}');
 
+  // [MORMOT-TLS13-SUITES-1] mORMot2's TNetTlsContext exposes CipherList (TLS
+  // 1.2 and below) but nothing for TLS 1.3 suites, and its OpenSSL binding has
+  // no SSL_CTX_set_ciphersuites (mORMot2 e5b820d44). Accepting the field would
+  // serve OpenSSL's default TLS 1.3 suites while the configuration says
+  // otherwise, so refuse before anything is allocated.
+  if AConfig.SSLCipherSuitesTLS13 <> '' then
+    raise EHorseException.New.Error(
+      'HORSE_PROVIDER_MORMOT: SSLCipherSuitesTLS13 is not supported - mORMot2 ' +
+      'cannot configure TLS 1.3 cipher suites, so they would stay at the ' +
+      'OpenSSL defaults. Leave SSLCipherSuitesTLS13 empty, or use a provider ' +
+      'that applies it (ICS, CrossSocket, nghttp2).');
+
   FConfig := AConfig;
   FPort   := APort;
 

@@ -148,6 +148,14 @@ end;
 - TLS applies to the **socket backends** — `mskThreadPool` (default) and
   `mskAsync`. The `mskHttpApi` (http.sys) backend binds its certificate at the OS
   level (`netsh http add sslcert`), so `SSLEnabled` raises a clear error there.
+- `SSLCipherList` sets the cipher rules for **TLS 1.2 and below only**. It has
+  no effect on TLS 1.3, which OpenSSL configures separately. mORMot2 provides no
+  way to choose TLS 1.3 suites, so TLS 1.3 always uses OpenSSL's defaults (all
+  strong AEAD ciphers). `SSLCipherSuitesTLS13` exists so the TLS settings match
+  the other providers, but a **non-empty value makes `Listen` raise** (v1.0.11)
+  rather than leave TLS 1.3 unrestricted while the configuration says otherwise.
+  If you must restrict TLS 1.3 suites, use the ICS, CrossSocket or nghttp2
+  provider.
 - See [`tests/TLS-TESTS.md`](tests/TLS-TESTS.md) for the one-way + mutual-TLS
   integration test (`HorseMormotTLSTestServer` / `…Client`).
 

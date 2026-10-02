@@ -6,6 +6,9 @@ REM
 REM  Runs HorseMormotTLSTestServer + HorseMormotTLSTestClient in two passes:
 REM    1. one-way TLS  (no argument)   -> T1, T2
 REM    2. mutual TLS   (mtls argument) -> T3, T4
+REM  then a third pass that needs no client:
+REM    3. TLS 1.3 suites refused (MORMOT-TLS13-SUITES-1) -> S1. mORMot2 cannot
+REM       apply SSLCipherSuitesTLS13, so a server given one must NOT start.
 REM
 REM  Usage:  run-tls-tests.bat            (build first with build-tls-dcc.bat)
 REM  Exit code: 0 = all passed, N = N failed assertions, 2 = VOID (nothing ran).
@@ -74,12 +77,14 @@ call :runpass "" "one-way TLS" oneway
 set /a TOTAL+=%ERRORLEVEL%
 call :runpass "mtls" "mutual TLS" mtls
 set /a TOTAL+=%ERRORLEVEL%
+call :runsuites
+set /a TOTAL+=%ERRORLEVEL%
 
 echo.
 echo ===========================================================================
 if "%VOIDED%"=="1" goto :report_void
 if not "%TOTAL%"=="0" goto :report_fail
-echo  ALL PASSED - one-way TLS and mutual TLS, TLS backend verified.
+echo  ALL PASSED - one-way TLS, mutual TLS, TLS 1.3 suites refused, TLS backend verified.
 echo ===========================================================================
 exit /b 0
 :report_fail
@@ -169,6 +174,58 @@ echo    ---- server output ----
 if exist "!LOG!" type "!LOG!"
 echo    -----------------------
 exit /b 0
+
+REM ---------------------------------------------------------------------------
+REM Pass 3 - SSLCipherSuitesTLS13 is REFUSED (MORMOT-TLS13-SUITES-1). Passes 1
+REM and 2 are the control: the same server, with the field empty, started and
+REM served. PASS needs three things at once: the server never binds, its log
+REM shows the OpenSSL backend loaded (so OpenSSL did not stop it), and the log
+REM names the field (so OUR refusal stopped it). A server that comes up is the
+REM defect: TLS 1.3 served with suites the configuration did not ask for.
+:runsuites
+echo.
+echo ===========================================================================
+echo  TLS pass: TLS 1.3 cipher suites must be refused
+echo ===========================================================================
+set "ARG=suites13"
+set "LOG=%BIN%\tls-suites13.log"
+set "OWNER="
+for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":%TLS_PORT% " ^| findstr /I "LISTENING"') do set "OWNER=%%P"
+if not "!OWNER!"=="" goto :port_busy
+del /q "!LOG!" >nul 2>&1
+pushd "%BIN%"
+start "" /B cmd /c ""%SERVER_EXE%" !ARG! > "!LOG!" 2>&1"
+popd
+set /a TRIES=0
+:s_wait
+ping -n 2 127.0.0.1 >nul 2>&1
+set "SRVPID="
+for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":%TLS_PORT% " ^| findstr /I "LISTENING"') do set "SRVPID=%%P"
+if not "!SRVPID!"=="" goto :s_served
+findstr /L /C:"Fatal:" "!LOG!" >nul 2>&1
+if not errorlevel 1 goto :s_exited
+set /a TRIES+=1
+if !TRIES! GEQ 10 goto :s_silent
+goto :s_wait
+:s_exited
+findstr /L /C:"TLS backend: OpenSSL" "!LOG!" >nul 2>&1
+if errorlevel 1 goto :s_wrongcause
+findstr /L /C:"SSLCipherSuitesTLS13" "!LOG!" >nul 2>&1
+if errorlevel 1 goto :s_wrongcause
+echo    PASS  S1 suites13: Listen refuses SSLCipherSuitesTLS13, naming it
+exit /b 0
+:s_served
+echo    FAIL  S1 suites13: the server STARTED - TLS 1.3 suites accepted but not applied
+taskkill /PID !SRVPID! /F /T >nul 2>&1
+exit /b 1
+:s_wrongcause
+echo    FAIL  S1 suites13: the server stopped, but not with the expected refusal
+call :dumplog
+exit /b 1
+:s_silent
+echo    FAIL  S1 suites13: no listener and no Fatal line within 10 tries
+call :dumplog
+exit /b 1
 
 :build_failed
 echo.

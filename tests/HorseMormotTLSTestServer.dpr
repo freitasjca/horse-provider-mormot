@@ -139,6 +139,12 @@ begin
       Config.SSLVerifyPeer := True;
     end;
 
+    // [MORMOT-TLS13-SUITES-1] run-tls-tests.bat pass 3: mORMot2 cannot apply
+    // TLS 1.3 suites, so Listen must refuse this configuration and name the
+    // field, rather than serve with OpenSSL's default suites.
+    if SameText(ParamStr(1), 'suites13') then
+      Config.SSLCipherSuitesTLS13 := 'TLS_CHACHA20_POLY1305_SHA256';
+
     RegisterRoutes;
 
     Writeln(Format('[MormotTLSTest] certs: %s', [CertDir]));
