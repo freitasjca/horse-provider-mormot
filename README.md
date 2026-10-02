@@ -4,7 +4,18 @@ mORMot2 transport provider for the [Horse](https://github.com/HashLoad/horse) we
 
 ## Status
 
-> **🚧 Under construction.** This repo is a scaffold. Implementation follows the blueprint at [`horse-provider-mormot/doc/building-a-mormot-provider.md`](https://github.com/freitasjca/horse-provider-mormot/blob/master/doc/building-a-mormot-provider.md) — read that first.
+> **Working provider, released.** Currently **v1.0.10**. Requests, cookies, multipart,
+> `SendFile`/`Download`, `Req.RawWebRequest`/`Res.RawWebResponse`, TLS/mTLS and graceful
+> shutdown all work; the test suite runs 124/124 on Delphi / Windows.
+>
+> The design blueprint is still worth reading before changing the bridges:
+> [`doc/building-a-mormot-provider.md`](https://github.com/freitasjca/horse-provider-mormot/blob/master/doc/building-a-mormot-provider.md).
+>
+> Two things to know before adopting it: TLS was silently serving **plain TCP** until
+> v1.0.9 (FIX-MORMOT-TLS-1 — `hsoEnableTls` must be passed to the server *constructor*),
+> so use v1.0.9 or later for HTTPS; and graceful shutdown loses the in-flight reply in
+> roughly 1 run in 80, an open defect described under
+> [Graceful shutdown](#graceful-shutdown).
 
 ## Activation
 
@@ -90,7 +101,7 @@ Define precedence in `THorseMormotConfig.Default`: `HORSE_MORMOT_HTTPAPI` (Windo
 | **Delphi** | 10.4 Sydney | `inline var`, `System.Threading` — same baseline as Horse. |
 | **Lazarus / FPC** | **3.2.0** | Unlike the CrossSocket provider (which needs FPC **3.3.1 trunk** for `{$MODESWITCH FUNCTIONREFERENCES}`), mORMot2 has no such requirement. FPC **3.2.2 stable + Lazarus 2.2+** work out of the box. See [Lazarus / FPC IDE setup](#lazarus--fpc-ide-setup) below. |
 | **mORMot2** | latest | Core units: `mormot.core.base`, `mormot.core.unicode`, `mormot.net.http`, `mormot.net.server`. |
-| **Horse** | ≥ 3.3.0 | First official release with `HORSE_PROVIDER_*` namespace (PATCH-HORSE-2) built in. |
+| **Horse** | ≥ 3.3.10 | 3.3.0 first carried the `HORSE_PROVIDER_*` namespace (PATCH-HORSE-2). The floor is **3.3.10 from provider v1.0.10**, because `StopListenGraceful` is silently inert through `THorse` on anything earlier — see [Graceful shutdown](#graceful-shutdown). |
 | **OpenSSL** | 1.1.x or 3.x | *Only if HTTPS is enabled.* |
 
 ### mORMot2 static blobs
@@ -137,6 +148,14 @@ end;
 - TLS applies to the **socket backends** — `mskThreadPool` (default) and
   `mskAsync`. The `mskHttpApi` (http.sys) backend binds its certificate at the OS
   level (`netsh http add sslcert`), so `SSLEnabled` raises a clear error there.
+- `SSLCipherList` sets the cipher rules for **TLS 1.2 and below only**. It has
+  no effect on TLS 1.3, which OpenSSL configures separately. mORMot2 provides no
+  way to choose TLS 1.3 suites, so TLS 1.3 always uses OpenSSL's defaults (all
+  strong AEAD ciphers). `SSLCipherSuitesTLS13` exists so the TLS settings match
+  the other providers, but a **non-empty value makes `Listen` raise** (v1.0.11)
+  rather than leave TLS 1.3 unrestricted while the configuration says otherwise.
+  If you must restrict TLS 1.3 suites, use the ICS, CrossSocket or nghttp2
+  provider.
 - See [`tests/TLS-TESTS.md`](tests/TLS-TESTS.md) for the one-way + mutual-TLS
   integration test (`HorseMormotTLSTestServer` / `…Client`).
 
@@ -171,6 +190,57 @@ end;
 > THorse.Use(procedure(Req: THorseRequest; Res: THorseResponse; Next: TNextProc)
 >   begin ... Next; end);
 > ```
+
+## Graceful shutdown
+
+`StopListenGraceful(ATimeoutMS)` stops accepting new work, waits for requests already in
+flight to finish, and **delivers their responses** before tearing the server down. It is
+not the same call as `StopListen`, which is abrupt and unchanged.
+
+```pascal
+THorse.StopListenGraceful(5000);   // wait up to 5 s for in-flight work
+```
+
+Implemented in **provider v1.0.10** (FIX-MORMOT-GRACEFUL-1). Measured: 735-752 ms for
+700 ms of remaining work.
+
+This provider performs **all three** steps the framework asks for — stop accepting,
+drain, tear down — because `THttpServerGeneric.Shutdown` sets a flag without closing a
+single socket. After it, `Request()` answers **404 to new requests** while in-flight ones
+keep their thread and socket. (The 404 is mORMot's own choice; 503 would be better and
+would have to come from Horse's pipeline.)
+
+### What was wrong before v1.0.10
+
+The provider had no override, so it inherited Horse's abstract base, which **discards the
+timeout**. The defect was purely *ordering*: `Stop` freed the server before draining, and
+freeing terminates mORMot's thread pool — so the free already blocked until the in-flight
+handler returned, and the handler then had no server left to answer through. The reply
+died at the moment the handler *finished*, not when shutdown began. The time was never
+wrong; the order was.
+
+**No settle delay is needed, and that was measured rather than assumed:** an A/B of 60
+runs with a 0 ms settle against 60 with 100 ms came back 60/60 both ways, so the default
+stays at 0. `HORSE_MORMOT_SETTLE_MS` exists for characterisation only.
+
+### Known open defect
+
+The reply is delivered in **79 of 80** runs. The single loss is unexplained — elapsed was
+normal at 749 ms, so the drain timing was right and the reply still did not arrive. Point
+estimate ~1.25%; 60 clean runs rule out 5% but not 1%. The settle A/B above shows the
+settle is *not* the cause, so no delay was added on no evidence.
+
+`tests/run-drain-batch.bat [RUNS] [SETTLE_MS]` is the detector: it counts pass/fail/void
+and saves each failing run as `fail-N.log`, because an intermittent is only diagnosable
+from the output of the run that failed.
+
+> **Requires Horse >= 3.3.10.** On earlier releases `THorseInstance.StopListenGraceful`
+> called its own `StopListen` and bypassed every provider override, so this works only
+> when called directly on `THorseProviderMormot` — through `THorse` it is silently inert,
+> with no error. Fixed upstream in
+> [HashLoad/horse#590](https://github.com/HashLoad/horse/pull/590), released in 3.3.10.
+
+---
 
 ## Layout
 

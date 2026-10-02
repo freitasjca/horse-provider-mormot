@@ -105,8 +105,18 @@ type
     // Default: False
     SSLVerifyPeer:  Boolean;
 
-    // OpenSSL cipher list. Empty → mORMot/OpenSSL default. Maps to TNetTlsContext.CipherList.
+    // TLS 1.2-and-below cipher RULES in OpenSSL syntax (SSL_CTX_set_cipher_list),
+    // e.g. 'ECDHE+AESGCM:!aNULL'. Empty → mORMot/OpenSSL default. Maps to
+    // TNetTlsContext.CipherList. Does NOT affect TLS 1.3, which OpenSSL
+    // configures separately (see SSLCipherSuitesTLS13).
     SSLCipherList:  string;
+
+    // TLS 1.3 cipher SUITES. Present so the TLS settings read the same on every
+    // provider, but mORMot2's TNetTlsContext has no way to apply them (no
+    // SSL_CTX_set_ciphersuites binding), so a NON-EMPTY value makes Listen
+    // raise rather than serve TLS 1.3 with OpenSSL's default suites while the
+    // configuration says otherwise. Leave it empty. [MORMOT-TLS13-SUITES-1]
+    SSLCipherSuitesTLS13: string;
 
     class function Default: THorseMormotConfig; static;
   end;
@@ -139,6 +149,7 @@ begin
   Result.SSLCACertFile  := '';
   Result.SSLVerifyPeer  := False;
   Result.SSLCipherList  := '';
+  Result.SSLCipherSuitesTLS13 := '';
 end;
 
 end.
