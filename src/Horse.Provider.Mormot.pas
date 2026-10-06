@@ -186,6 +186,78 @@ uses
   Horse.Constants,
   Horse.Exception.Interrupted;
 
+// [MORMOT-TLS13-SUITES-2] TNetTlsContext.CipherSuites (TLS 1.3, applied with
+// SSL_CTX_set_ciphersuites) exists from mORMot2 commit 2.4.16916 (7eb6b9e56,
+// 2026-09-16). SYNOPSE_FRAMEWORK_COMMIT is that number as an integer constant,
+// but it only exists from 18bddf98e (2026-07-17), hence the DECLARED test first.
+// Older mORMot2 keeps the v1.0.11 behaviour: a non-empty SSLCipherSuitesTLS13
+// is refused at Listen (MORMOT-TLS13-SUITES-1). boss.json cannot express a
+// mORMot2 floor (mORMot2 is not a Boss dependency), so the source decides.
+{$IF DECLARED(SYNOPSE_FRAMEWORK_COMMIT)}
+  {$IF SYNOPSE_FRAMEWORK_COMMIT >= 16916}
+    {$DEFINE HORSE_MORMOT_HAS_TLS13_SUITES}
+  {$IFEND}
+{$IFEND}
+
+{$IFDEF HORSE_MORMOT_HAS_TLS13_SUITES}
+const
+  // [MORMOT-TLS13-SUITES-2] The five TLS 1.3 cipher suites RFC 8446 defines,
+  // exactly as OpenSSL names them. OpenSSL SILENTLY drops a misspelled or
+  // wrongly cased name that sits beside a valid one, and mORMot2 checks only
+  // the return code of SSL_CTX_set_ciphersuites, so the provider checks the
+  // names itself before handing them over - same list and same rule as
+  // horse-provider-crosssocket 1.0.27 (TLSOPT-3).
+  TLS13_SUITE_NAMES: array[0..4] of string = (
+    'TLS_AES_128_GCM_SHA256',
+    'TLS_AES_256_GCM_SHA384',
+    'TLS_CHACHA20_POLY1305_SHA256',
+    'TLS_AES_128_CCM_SHA256',
+    'TLS_AES_128_CCM_8_SHA256');
+
+// Every name in a colon-separated TLS 1.3 suite list that is not one of
+// TLS13_SUITE_NAMES, comma-joined; '' when all are known. Exact and
+// case-sensitive, as OpenSSL is. Blanks around a name are ignored, as OpenSSL
+// ignores them.
+function UnknownTls13SuiteNames(const ASuites: string): string;
+var
+  LRest, LName: string;
+  LPos, I: Integer;
+  LKnown: Boolean;
+begin
+  Result := '';
+  LRest := ASuites;
+  while LRest <> '' do
+  begin
+    LPos := Pos(':', LRest);
+    if LPos > 0 then
+    begin
+      LName := Trim(Copy(LRest, 1, LPos - 1));
+      LRest := Copy(LRest, LPos + 1, MaxInt);
+    end
+    else
+    begin
+      LName := Trim(LRest);
+      LRest := '';
+    end;
+    if LName = '' then
+      Continue;
+    LKnown := False;
+    for I := Low(TLS13_SUITE_NAMES) to High(TLS13_SUITE_NAMES) do
+      if TLS13_SUITE_NAMES[I] = LName then
+      begin
+        LKnown := True;
+        Break;
+      end;
+    if not LKnown then
+    begin
+      if Result <> '' then
+        Result := Result + ', ';
+      Result := Result + LName;
+    end;
+  end;
+end;
+{$ENDIF}
+
 var
   // [FIX-MORMOT-GRACEFUL-1] Settle window between "no requests in flight" and
   // teardown. DEFAULT 0: mORMot writes the reply synchronously in the request
@@ -326,6 +398,9 @@ var
   LTls:    TNetTlsContext;
   LUseTls: Boolean;
   LOpts:   THttpServerOptions;
+  {$IFDEF HORSE_MORMOT_HAS_TLS13_SUITES}
+  LUnknown: string;
+  {$ENDIF}
 begin
   // [SEC-32] Stop any running server before starting a new one
   if Assigned(FServer) then
@@ -339,17 +414,37 @@ begin
       'backend — bind the certificate at the OS level with: ' +
       'netsh http add sslcert ipport=0.0.0.0:<port> certhash=<thumbprint> appid={<guid>}');
 
-  // [MORMOT-TLS13-SUITES-1] mORMot2's TNetTlsContext exposes CipherList (TLS
-  // 1.2 and below) but nothing for TLS 1.3 suites, and its OpenSSL binding has
-  // no SSL_CTX_set_ciphersuites (mORMot2 e5b820d44). Accepting the field would
-  // serve OpenSSL's default TLS 1.3 suites while the configuration says
-  // otherwise, so refuse before anything is allocated.
+  {$IFDEF HORSE_MORMOT_HAS_TLS13_SUITES}
+  // [MORMOT-TLS13-SUITES-2] Check every TLS 1.3 suite name before anything is
+  // allocated: OpenSSL keeps the valid names and silently drops a typo beside
+  // them, so an unchecked list could serve fewer suites than configured - or
+  // different ones - without a word. Limitation: a correctly spelled suite that
+  // THIS OpenSSL build lacks (e.g. CCM_8, or ChaCha20 on a FIPS build) is still
+  // dropped silently; mORMot2 offers no read-back to catch it.
+  if AConfig.SSLCipherSuitesTLS13 <> '' then
+  begin
+    LUnknown := UnknownTls13SuiteNames(AConfig.SSLCipherSuitesTLS13);
+    if LUnknown <> '' then
+      raise EHorseException.New.Error(
+        'HORSE_PROVIDER_MORMOT: SSLCipherSuitesTLS13 names unknown TLS 1.3 ' +
+        'suite(s): ' + LUnknown + '. Names are exact and case-sensitive; the ' +
+        'valid ones are TLS_AES_128_GCM_SHA256, TLS_AES_256_GCM_SHA384, ' +
+        'TLS_CHACHA20_POLY1305_SHA256, TLS_AES_128_CCM_SHA256 and ' +
+        'TLS_AES_128_CCM_8_SHA256.');
+  end;
+  {$ELSE}
+  // [MORMOT-TLS13-SUITES-1] This mORMot2 (before commit 2.4.16916) has no way
+  // to apply TLS 1.3 suites. Accepting the field would serve OpenSSL's default
+  // TLS 1.3 suites while the configuration says otherwise, so refuse before
+  // anything is allocated.
   if AConfig.SSLCipherSuitesTLS13 <> '' then
     raise EHorseException.New.Error(
-      'HORSE_PROVIDER_MORMOT: SSLCipherSuitesTLS13 is not supported - mORMot2 ' +
-      'cannot configure TLS 1.3 cipher suites, so they would stay at the ' +
-      'OpenSSL defaults. Leave SSLCipherSuitesTLS13 empty, or use a provider ' +
-      'that applies it (ICS, CrossSocket, nghttp2).');
+      'HORSE_PROVIDER_MORMOT: SSLCipherSuitesTLS13 is not supported with this ' +
+      'mORMot2 - TLS 1.3 cipher suites need mORMot2 2.4.16916 or later ' +
+      '(2026-09-16), so they would stay at the OpenSSL defaults. Update ' +
+      'mORMot2, leave SSLCipherSuitesTLS13 empty, or use a provider that ' +
+      'applies it (ICS, CrossSocket, nghttp2).');
+  {$ENDIF}
 
   FConfig := AConfig;
   FPort   := APort;
@@ -462,6 +557,13 @@ begin
     end;
     if AConfig.SSLCipherList <> '' then
       LTls.CipherList := StringToUtf8(AConfig.SSLCipherList);
+    {$IFDEF HORSE_MORMOT_HAS_TLS13_SUITES}
+    // [MORMOT-TLS13-SUITES-2] Names already checked above. mORMot2 passes this to
+    // SSL_CTX_set_ciphersuites on its OpenSSL engine (empty = mORMot2's own
+    // default suites); TLS 1.2 rules above are a separate call and untouched.
+    if AConfig.SSLCipherSuitesTLS13 <> '' then
+      LTls.CipherSuites := StringToUtf8(AConfig.SSLCipherSuitesTLS13);
+    {$ENDIF}
   end;
 
   // WaitStarted is NOT on THttpServerGeneric and its signature differs per

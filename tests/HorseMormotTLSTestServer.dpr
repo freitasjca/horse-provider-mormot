@@ -143,11 +143,19 @@ begin
       Config.SSLVerifyPeer := True;
     end;
 
-    // [MORMOT-TLS13-SUITES-1] run-tls-tests.bat pass 3: mORMot2 cannot apply
-    // TLS 1.3 suites, so Listen must refuse this configuration and name the
-    // field, rather than serve with OpenSSL's default suites.
+    // run-tls-tests.bat pass 3. With mORMot2 2.4.16916+ the provider APPLIES
+    // the suites (MORMOT-TLS13-SUITES-2): C1-C3 check that only ChaCha20 is
+    // negotiated over TLS 1.3 and TLS 1.2 is untouched. With an older mORMot2
+    // Listen refuses it instead (MORMOT-TLS13-SUITES-1).
     if SameText(ParamStr(1), 'suites13') then
       Config.SSLCipherSuitesTLS13 := 'TLS_CHACHA20_POLY1305_SHA256';
+    // [MORMOT-TLS13-SUITES-2] pass 3 C4/C5: Listen must refuse, naming the
+    // cause. 'SHA348' beside a valid suite is the realistic typo: OpenSSL keeps
+    // the valid name and drops the typo without an error.
+    if SameText(ParamStr(1), 'suites13typo') then
+      Config.SSLCipherSuitesTLS13 := 'TLS_AES_256_GCM_SHA348:TLS_CHACHA20_POLY1305_SHA256';
+    if SameText(ParamStr(1), 'suites13bad') then
+      Config.SSLCipherSuitesTLS13 := 'TLS_NO_SUCH_SUITE';
 
     RegisterRoutes;
 
