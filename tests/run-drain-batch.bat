@@ -30,6 +30,13 @@ if not "!SETTLE!"=="" (
   echo settle: provider default
 )
 echo runs:   !RUNS!
+REM  Backend under test (B7): HORSE_MORMOT_TEST_BACKEND = threadpool, async or
+REM  httpapi, read by the probe itself; unset keeps the define-selected default.
+REM  httpapi needs Administrator or a one-time urlacl for the probe's port:
+REM    netsh http add urlacl url=http://+:9202/ user=%USERNAME%
+set "BACKEND=%HORSE_MORMOT_TEST_BACKEND%"
+if "!BACKEND!"=="" (set "BACKEND_LABEL=default") else (set "BACKEND_LABEL=!BACKEND!")
+echo backend: !BACKEND_LABEL!
 echo.
 
 set /a PASS=0
@@ -38,11 +45,24 @@ set /a VOIDS=0
 
 for /L %%I in (1,1,!RUNS!) do (
   bin\HorseMormotDrainTest.exe > "%TEMP%\drainbatch.log" 2>&1
-  if errorlevel 2 (
+  set "RC=!ERRORLEVEL!"
+  REM A probe built before HorseMormotTestBackend ignores the variable and would
+  REM report a threadpool result as the backend that was asked for. Only checked
+  REM below exit 2: a VOID run prints its own reason, and a typo in the variable is one.
+  if not "!BACKEND!"=="" if !RC! LSS 2 (
+    findstr /I /L /C:"backend: !BACKEND! " "%TEMP%\drainbatch.log" >nul 2>&1
+    if errorlevel 1 set "RC=WRONG"
+  )
+  if "!RC!"=="WRONG" (
+    set /a VOIDS+=1
+    echo   run %%I: VOID - the probe did not report backend !BACKEND!; rebuild it
+    if %%I==1 goto :first_void
+  ) else if !RC! GEQ 2 (
     set /a VOIDS+=1
     echo   run %%I: VOID - nothing was tested
     type "%TEMP%\drainbatch.log"
-  ) else if errorlevel 1 (
+    if %%I==1 goto :first_void
+  ) else if !RC! GEQ 1 (
     set /a FAIL+=1
     echo   run %%I: FAIL
     REM Keep the whole failing run. An intermittent is only diagnosable from the
@@ -56,11 +76,22 @@ for /L %%I in (1,1,!RUNS!) do (
 
 echo.
 echo ===========================================================================
-echo  passed !PASS! / !RUNS!   failed !FAIL!   void !VOIDS!
+echo  [backend !BACKEND_LABEL!]  passed !PASS! / !RUNS!   failed !FAIL!   void !VOIDS!
 if !FAIL! GTR 0 echo  failing runs saved as fail-N.log in this directory
 echo ===========================================================================
 if !VOIDS! GTR 0 exit /b 2
 exit /b !FAIL!
+
+:first_void
+REM  A VOID on the FIRST run is the environment (a held port, a missing http.sys
+REM  URL reservation, a bad HORSE_MORMOT_TEST_BACKEND), not an intermittent: the
+REM  other runs would print the same failure. B7's first httpapi batch did, 20 times.
+echo.
+echo ===========================================================================
+echo  [backend !BACKEND_LABEL!]  VOID on run 1 - batch stopped, nothing was tested.
+echo  Fix the reason printed above and run again.
+echo ===========================================================================
+exit /b 2
 
 :no_exe
 echo ERROR: bin\HorseMormotDrainTest.exe not found - run build-drain-dcc.bat first.

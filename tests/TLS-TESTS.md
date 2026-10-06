@@ -152,6 +152,38 @@ HorseMormotTLSTestServer mtls   # terminal 1
 HorseMormotTLSTestClient mtls    # terminal 2  → T3, T4 pass
 ```
 
+## Choosing the mORMot backend
+
+Every test server in this repo reads `HORSE_MORMOT_TEST_BACKEND`, through
+`tests/HorseMormotTestBackend.pas`. The suites can therefore be repeated per
+backend without a rebuild:
+
+| Value | Backend | This TLS suite |
+|---|---|---|
+| unset | `THorseMormotConfig.Default`, as selected by the defines | runs |
+| `threadpool` | `THttpServer` | runs |
+| `async` | `THttpAsyncServer` | runs. This is the backend where `hsoEnableTls` works only through the constructor (FIX-MORMOT-TLS-1) |
+| `httpapi` | `THttpApiServer` (http.sys) | **VOID by design.** http.sys binds certificates through `netsh`, and the provider refuses `SSLEnabled` on it |
+
+```bat
+set HORSE_MORMOT_TEST_BACKEND=async
+run-tls-tests.bat
+```
+
+The server prints `backend: <value> (...)`. When the variable is set, the
+runner requires that line, so a binary built before the selector existed
+cannot report a threadpool result as an async one; that case is VOID, not
+PASS. An unknown value makes the server raise at startup. The summary line
+names the backend: `ALL PASSED [backend async]`.
+
+The same variable drives `run-drain-batch.bat` and the param and integration
+servers. `httpapi` needs Administrator rights, or a one-time URL reservation
+per port. Ports are 9010 (integration), 9200 (param) and 9202 (drain):
+
+```bat
+netsh http add urlacl url=http://+:9202/ user=%USERNAME%
+```
+
 ## What each assertion proves
 
 | Mode | Check | Proves |

@@ -50,7 +50,9 @@ uses
   Horse.Commons,
   Horse.Core.Cookie,
   Horse.Provider.Mormot,
-  Horse.Provider.Mormot.Pool;
+  Horse.Provider.Mormot.Config,
+  Horse.Provider.Mormot.Pool,
+  HorseMormotTestBackend;   // HORSE_MORMOT_TEST_BACKEND (B7)
 
 const
   TEST_PORT = 9200;
@@ -430,6 +432,9 @@ begin
 end;
 {$ENDIF}
 
+var
+  LConfig: THorseMormotConfig;
+
 // ── Entry point ────────────────────────────────────────────────────────────────
 
 begin
@@ -447,11 +452,17 @@ begin
 {$ENDIF}
   try
     RegisterRoutes;
+    // Default + the optional backend override. With HORSE_MORMOT_TEST_BACKEND
+    // unset this is exactly what Listen(TEST_PORT) used: InternalListen with
+    // THorseMormotConfig.Default.
+    LConfig := THorseMormotConfig.Default;
+    ApplyTestBackend(LConfig);   // raises on an unknown value
     Writeln(Format('[MormotParamTest] Starting on http://127.0.0.1:%d', [TEST_PORT]));
+    Writeln(Format('[MormotParamTest] backend: %s', [BackendName(LConfig.ServerKind)]));
     Writeln('[MormotParamTest] Run HorseMormotParamTestClient in a second terminal.');
     Writeln('[MormotParamTest] Press Ctrl+C to stop cleanly (leak report will follow).');
     // Listen blocks the main thread in console mode until Stop/signal/kill.
-    THorseProviderMormot.Listen(TEST_PORT);
+    THorseProviderMormot.ListenWithConfig(TEST_PORT, LConfig);
     Writeln('[MormotParamTest] Server stopped.');
   except
     on E: Exception do
