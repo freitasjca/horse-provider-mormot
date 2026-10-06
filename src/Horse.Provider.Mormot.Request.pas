@@ -89,15 +89,19 @@ type
     rvOK,
     rvBadRequest,        // malformed URL, Host, smuggling, or excess headers
     rvMethodNotAllowed,  // verb not in allowlist [SEC-15]
-    rvPayloadTooLarge    // body exceeds MaxBodyBytes [SEC-16]
+    rvPayloadTooLarge,   // body exceeds MaxBodyBytes [SEC-16]
+    rvLengthRequired     // chunked body the backend did not deliver [FIX-MORMOT-HTTPSYS-CHUNKED-1]
   );
 
   TMormotRequestBridge = class
   public
+    // ARefuseChunkedBody: True only on mskHttpApi, whose mORMot2 path reads a
+    // request body only when Content-Length is set - see the check in the body.
     class function Validate(
       const ACtxt:         THttpServerRequestAbstract;
       out   ARejectReason: string;
-            AMaxBodyBytes: Int64
+            AMaxBodyBytes: Int64;
+            ARefuseChunkedBody: Boolean = False
     ): TRequestValidationResult;
 
     class procedure Populate(
@@ -199,7 +203,8 @@ end;
 class function TMormotRequestBridge.Validate(
   const ACtxt:         THttpServerRequestAbstract;
   out   ARejectReason: string;
-        AMaxBodyBytes: Int64
+        AMaxBodyBytes: Int64;
+        ARefuseChunkedBody: Boolean
 ): TRequestValidationResult;
 var
   LMethod:  string;
@@ -283,6 +288,24 @@ begin
   begin
     ARejectReason := 'Unsupported Transfer-Encoding: ' + LTeValue;
     Exit(rvBadRequest);
+  end;
+
+  // ── [FIX-MORMOT-HTTPSYS-CHUNKED-1] Refuse a chunked body that never arrived ─
+  // mORMot2's THttpApiServer reads the request entity only when Content-Length
+  // is non-zero ("if incontlen <> 0 then", no else - mormot.net.server.pas, at
+  // least e5b820d44..fd5b340). A Transfer-Encoding: chunked request therefore
+  // reaches OnRequest with an EMPTY body and no error, and the route answers as
+  // if the client had sent nothing (a multipart upload became "no file field").
+  // Refuse instead: 411 tells the client exactly what to send. A chunked request
+  // whose body really is empty is refused too - it cannot be told apart here.
+  // The socket backends de-chunk correctly, so the caller passes True only for
+  // mskHttpApi.
+  if ARefuseChunkedBody and HasTE and (LTeValue = 'chunked')
+     and (Length(ACtxt.InContent) = 0) then
+  begin
+    ARejectReason := 'Length Required: chunked request bodies are not delivered ' +
+      'by the http.sys backend - send Content-Length';
+    Exit(rvLengthRequired);
   end;
 
   // ── [SEC-16] Body size guard ──────────────────────────────────────────────

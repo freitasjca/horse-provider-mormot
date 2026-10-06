@@ -4,9 +4,11 @@ mORMot2 transport provider for the [Horse](https://github.com/HashLoad/horse) we
 
 ## Status
 
-> **Working provider, released.** Currently **v1.0.12**. Requests, cookies, multipart,
+> **Working provider, released.** Currently **v1.0.13**. Requests, cookies, multipart,
 > `SendFile`/`Download`, `Req.RawWebRequest`/`Res.RawWebResponse`, TLS/mTLS and graceful
-> shutdown all work; the test suite runs 124/124 on Delphi / Windows.
+> shutdown all work; the integration suite runs 126/126 on Delphi / Windows on the default
+> thread-pool backend. The http.sys backend has limits of its own: see
+> [http.sys backend limitations](#httpsys-backend-limitations).
 >
 > The design blueprint is still worth reading before changing the bridges:
 > [`doc/building-a-mormot-provider.md`](https://github.com/freitasjca/horse-provider-mormot/blob/master/doc/building-a-mormot-provider.md).
@@ -93,6 +95,39 @@ HORSE_PROVIDER_MORMOT      ← selects the mORMot transport (axis A)
 
 Define precedence in `THorseMormotConfig.Default`: `HORSE_MORMOT_HTTPAPI` (Windows) →
 `HORSE_MORMOT_ASYNC` → thread-pool. A runtime `Cfg.ServerKind` always overrides the define.
+
+### Integration results per backend
+
+The same 126-check integration suite (`samples/tests`) on each backend, 2026-10-06,
+Windows / Delphi 12, mORMot2 `fd5b340`:
+
+| Backend | Result | What fails |
+|---|---|---|
+| `mskThreadPool` | **126/126** | — |
+| `mskAsync` | 125/126 | `RemoteAddr` is empty for a **loopback** client: mORMot2's async server always reports 127.0.0.1 as empty, ignoring `RemoteIPLocalHostAsVoidInServers`. Remote clients are unaffected. |
+| `mskHttpApi` | 118/126 | See below |
+
+### http.sys backend limitations
+
+These come from mORMot2's http.sys binding (`THttpApiServer`) or from http.sys itself, not
+from this provider; they are reported upstream. Prefer `mskThreadPool` or `mskAsync` if
+any of them matters to you.
+
+- **Chunked request bodies are refused with `411 Length Required`** (since v1.0.13). mORMot2
+  reads the request body only when `Content-Length` is present, so a body sent with
+  `Transfer-Encoding: chunked` used to reach your route **empty, with no error** — a
+  multipart upload looked like "no file field". The provider now refuses such a request,
+  naming `Content-Length` in the JSON error, rather than run your route without its body.
+  Clients that stream uploads chunked must send `Content-Length` on this backend.
+- **Only the last `Set-Cookie` header is sent.** http.sys keeps one slot per known response
+  header, and mORMot2 overwrites it, so a route setting two cookies delivers only the second.
+- **`POST`/`PUT` with no body and no `Content-Length` get `411` from http.sys itself**,
+  before the request reaches Horse. Send `Content-Length: 0`.
+- **No TLS fields**: `SSLEnabled` raises at `Listen`; bind the certificate with
+  `netsh http add sslcert`.
+
+Every test server in `tests/` and `samples/tests/` takes the backend from
+`HORSE_MORMOT_TEST_BACKEND` (`threadpool`, `async` or `httpapi`); see `tests/TLS-TESTS.md`.
 
 ## Minimum requirements
 

@@ -700,7 +700,8 @@ begin
 
     // ── [SEC-29] Validate BEFORE touching the pool ──────────────────────────
     ValResult := TMormotRequestBridge.Validate(
-      Ctxt, RejectReason, FConfig.MaxBodyBytes);
+      Ctxt, RejectReason, FConfig.MaxBodyBytes,
+      FConfig.ServerKind = mskHttpApi);   // [FIX-MORMOT-HTTPSYS-CHUNKED-1]
 
     if ValResult <> rvOK then
     begin
@@ -710,6 +711,7 @@ begin
       case ValResult of
         rvMethodNotAllowed: Result := SendError(Ctxt, 405, 'Method Not Allowed');
         rvPayloadTooLarge:  Result := SendError(Ctxt, 413, 'Payload Too Large');
+        rvLengthRequired:   Result := SendError(Ctxt, 411, RejectReason);
         rvBadRequest:       Result := SendError(Ctxt, 400, 'Bad Request');
       else
         Result := SendError(Ctxt, 400, 'Bad Request');
