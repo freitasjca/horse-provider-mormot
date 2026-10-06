@@ -54,6 +54,9 @@ program HorseMormotTestClient;
     35  GET    /stream/empty                 → 501 not-implemented + server still healthy
     36  GET    /stream/pull  ×2 concurrent   → both 501, server still healthy
                                                (concurrent-probe of streaming capability)
+    46  POST   /echo/body  CHUNKED body       → body echoed intact, OR 411 naming
+                                               Content-Length - never 200 with the body
+                                               lost (FIX-MORMOT-HTTPSYS-CHUNKED-1)
 *)
 
 uses
@@ -75,6 +78,7 @@ const
   CONCURRENT_COUNT    = 4;
   BURST_COUNT         = 8;
   RAPID_SEQ_COUNT     = 5;
+  CHUNKED_BODY_MARKER = 'CHUNKED_BODY_MARKER_7F3A';   // test 46
 
 var
   GPassCount:        Integer = 0;
@@ -152,12 +156,144 @@ type
     ClientMs:   Int64;
   end;
 
+  // [FIX-MORMOT-HTTPSYS-CHUNKED-1] Test 46's request body. It must NOT descend
+  // from TCustomMemoryStream: TCrossHttpClient sends memory streams and TBytes
+  // with Content-Length, and every other TStream with Transfer-Encoding: chunked
+  // (Net.CrossHttpClient.pas, TCrossHttpClient.DoRequest stream overload).
+  TChunkProbeStream = class(TStream)
+  private
+    FData: TBytes;
+    FPos:  Int64;
+  public
+    constructor Create(const AText: string);
+    function Read(var Buffer; Count: Longint): Longint; override;
+    function Write(const Buffer; Count: Longint): Longint; override;
+    function Seek(const Offset: Int64; Origin: TSeekOrigin): Int64; override;
+  end;
+
+constructor TChunkProbeStream.Create(const AText: string);
+begin
+  inherited Create;
+  FData := TEncoding.UTF8.GetBytes(AText);
+  FPos  := 0;
+end;
+
+function TChunkProbeStream.Read(var Buffer; Count: Longint): Longint;
+var
+  LAvail: Int64;
+begin
+  LAvail := Int64(Length(FData)) - FPos;
+  if LAvail > Count then
+    LAvail := Count;
+  if LAvail < 0 then
+    LAvail := 0;
+  if LAvail > 0 then
+  begin
+    Move(FData[FPos], Buffer, LAvail);
+    Inc(FPos, LAvail);
+  end;
+  Result := Longint(LAvail);
+end;
+
+function TChunkProbeStream.Write(const Buffer; Count: Longint): Longint;
+begin
+  raise EStreamError.Create('TChunkProbeStream is read-only');
+end;
+
+function TChunkProbeStream.Seek(const Offset: Int64; Origin: TSeekOrigin): Int64;
+begin
+  case Origin of
+    soBeginning: FPos := Offset;
+    soCurrent:   FPos := FPos + Offset;
+    soEnd:       FPos := Int64(Length(FData)) + Offset;
+  end;
+  Result := FPos;
+end;
+
 function DoSync(
   const AClient:  TCrossHttpClient;
   const AMethod:  string;
   const AUrl:     string;
   const AHeaders: THttpHeader;
   const ABody:    TBytes;
+  out   AResult:  TReqResult
+): Boolean;
+var
+  LEvent:         TEvent;
+  LResult:        TReqResult;
+  LSWReq:         TStopwatch;
+  LCallbackTicks: Int64;
+begin
+  LResult        := Default(TReqResult);
+  LEvent         := TEvent.Create(nil, True, False, '');
+  LCallbackTicks := 0;
+  try
+    LSWReq := TStopwatch.StartNew;
+    AClient.DoRequest(AMethod, AUrl, AHeaders, ABody, nil, nil,
+      procedure(const AResp: ICrossHttpClientResponse)
+      begin
+        // [HARNESS-CB-1] SetEvent runs in finally. StreamToStr raises on a body
+        // that is not valid UTF-8; before this, the exception skipped SetEvent,
+        // the caller waited out TIMEOUT_MS, and the StatusCode already stored
+        // made a "status 200" check pass on a request that really failed.
+        try
+          try
+            LCallbackTicks := LSWReq.ElapsedMilliseconds;
+            if AResp <> nil then
+            begin
+              LResult.StatusCode := AResp.StatusCode;
+              LResult.Body       := StreamToStr(AResp.Content);
+              LResult.Response   := AResp;
+            end;
+          except
+            on E: Exception do
+            begin
+              LResult.StatusCode := CALLBACK_FAILED;
+              LResult.Body       := 'CALLBACK EXCEPTION ' + E.ClassName + ': ' + E.Message;
+            end;
+          end;
+        finally
+          LEvent.SetEvent;
+        end;
+      end);
+    LResult.TimedOut := (LEvent.WaitFor(TIMEOUT_MS) <> wrSignaled);
+    LSWReq.Stop;
+    if LResult.TimedOut then
+    begin
+      LResult.ServerMs := 0;
+      LResult.ClientMs := LSWReq.ElapsedMilliseconds;
+    end
+    else
+    begin
+      LResult.ServerMs := LCallbackTicks;
+      LResult.ClientMs := LSWReq.ElapsedMilliseconds - LCallbackTicks;
+    end;
+  finally
+    LEvent.Free;
+  end;
+  AResult := LResult;
+  // [HARNESS-CB-1] A timeout must fail every check: a callback that lands after
+  // WaitFor gave up can still have written StatusCode, so clear it here.
+  if AResult.TimedOut then
+  begin
+    AResult.StatusCode := 0;
+    AResult.Body       := '';
+  end
+  else if AResult.StatusCode = CALLBACK_FAILED then
+    Writeln('  ERROR  ' + AResult.Body);
+  Result  := not AResult.TimedOut;
+  ReportTiming(AMethod + ' ' + AUrl, LResult.ServerMs, LResult.ClientMs,
+    LResult.TimedOut);
+end;
+
+// Same as DoSync, with a TStream body - which TCrossHttpClient sends CHUNKED
+// unless it is a memory stream (test 46).
+function DoSyncStream(
+  const AClient:  TCrossHttpClient;
+  const AMethod:  string;
+  const AUrl:     string;
+  const AHeaders: THttpHeader;
+  const ABody:    TStream;
   out   AResult:  TReqResult
 ): Boolean;
 var
@@ -365,6 +501,7 @@ var
   LHeaders:       THttpHeader;
   LForm:          THttpMultiPartFormData;
   LFileStream:    TMemoryStream;
+  LChunkStream:   TChunkProbeStream;   // test 46
   LFileBytes:     TBytes;
   LLargeBody:     TBytes;
   LSessionCookie: string;
@@ -1071,6 +1208,34 @@ begin
     'GET', BASE_URL + '/params/decode?v=caf%C3%A9', '', 'caf' + #$00E9);
   CheckDecodeCase('45  PUT /params/decode-form  body v=100%25  (form-urlencoded - ContentFields)',
     'PUT', BASE_URL + '/params/decode-form', 'v=100%25', '100%');
+
+  // ── 46  A chunked request body is delivered, or refused - never lost ────────
+  // [FIX-MORMOT-HTTPSYS-CHUNKED-1] The socket backends de-chunk and echo the
+  // body. mORMot2's http.sys path reads a body only when Content-Length is set,
+  // so it used to hand the route an EMPTY body and the route answered 200
+  // "size":0; the provider now refuses that request with 411 instead. Both
+  // outcomes pass. A 200 without the marker is the defect. Two checks on every
+  // backend, so the total does not depend on which one is running.
+  Section('46  POST /echo/body  chunked body  (delivered, or 411 - never lost)');
+  LChunkStream := TChunkProbeStream.Create(CHUNKED_BODY_MARKER);
+  DoSyncStream(AClient, 'POST', BASE_URL + '/echo/body', nil, LChunkStream, R);
+  // On a timeout the client may still be reading the stream: leak it rather
+  // than free it under the sender.
+  if not R.TimedOut then
+    LChunkStream.Free;
+  if R.StatusCode = 411 then
+  begin
+    Check('refused with 411 (this backend cannot read chunked bodies)', True);
+    Check('411 body tells the client to send Content-Length',
+      Pos('Content-Length', R.Body) > 0, R.Body);
+  end
+  else
+  begin
+    Check('status 200 (chunked body accepted)', R.StatusCode = 200,
+      Format('%d / %s', [R.StatusCode, R.Body]));
+    Check('chunked body delivered intact - not silently empty',
+      Pos(CHUNKED_BODY_MARKER, R.Body) > 0, R.Body);
+  end;
 
 end;
 
