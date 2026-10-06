@@ -4,7 +4,7 @@ mORMot2 transport provider for the [Horse](https://github.com/HashLoad/horse) we
 
 ## Status
 
-> **Working provider, released.** Currently **v1.0.13**. Requests, cookies, multipart,
+> **Working provider, released.** Currently **v1.0.14**. Requests, cookies, multipart,
 > `SendFile`/`Download`, `Req.RawWebRequest`/`Res.RawWebResponse`, TLS/mTLS and graceful
 > shutdown all work; the integration suite runs 126/126 on Delphi / Windows on the default
 > thread-pool backend. The http.sys backend has limits of its own: see
@@ -104,13 +104,15 @@ Windows / Delphi 12, mORMot2 `fd5b340`:
 | Backend | Result | What fails |
 |---|---|---|
 | `mskThreadPool` | **126/126** | — |
-| `mskAsync` | 125/126 | `RemoteAddr` is empty for a **loopback** client: mORMot2's async server always reports 127.0.0.1 as empty, ignoring `RemoteIPLocalHostAsVoidInServers`. Remote clients are unaffected. |
+| `mskAsync` | 125/126 | `RemoteAddr` is empty for a **loopback** client: mORMot2's async server always reports 127.0.0.1 as empty, ignoring `RemoteIPLocalHostAsVoidInServers` ([mORMot2#639](https://github.com/synopse/mORMot2/issues/639)). Remote clients are unaffected. |
 | `mskHttpApi` | 118/126 | See below |
 
 ### http.sys backend limitations
 
 These come from mORMot2's http.sys binding (`THttpApiServer`) or from http.sys itself, not
-from this provider; they are reported upstream. Prefer `mskThreadPool` or `mskAsync` if
+from this provider; the mORMot2 ones are reported upstream as
+[#637](https://github.com/synopse/mORMot2/issues/637) (chunked bodies) and
+[#638](https://github.com/synopse/mORMot2/issues/638) (`Set-Cookie`). Prefer `mskThreadPool` or `mskAsync` if
 any of them matters to you.
 
 - **Chunked request bodies are refused with `411 Length Required`** (since v1.0.13). mORMot2
@@ -184,13 +186,19 @@ end;
   `mskAsync`. The `mskHttpApi` (http.sys) backend binds its certificate at the OS
   level (`netsh http add sslcert`), so `SSLEnabled` raises a clear error there.
 - `SSLCipherList` sets the cipher rules for **TLS 1.2 and below only**. It has
-  no effect on TLS 1.3, which OpenSSL configures separately. mORMot2 provides no
-  way to choose TLS 1.3 suites, so TLS 1.3 always uses OpenSSL's defaults (all
-  strong AEAD ciphers). `SSLCipherSuitesTLS13` exists so the TLS settings match
-  the other providers, but a **non-empty value makes `Listen` raise** (v1.0.11)
-  rather than leave TLS 1.3 unrestricted while the configuration says otherwise.
-  If you must restrict TLS 1.3 suites, use the ICS, CrossSocket or nghttp2
-  provider.
+  no effect on TLS 1.3, which OpenSSL configures separately.
+- `SSLCipherSuitesTLS13` sets the **TLS 1.3** suites (v1.0.14): exact IANA names,
+  colon-separated, in priority order, e.g.
+  `'TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256'`. It needs **mORMot2
+  2.4.16916 or later** (2026-09-16), which added `TNetTlsContext.CipherSuites`;
+  the provider detects that at compile time. Every name is checked at `Listen`
+  against the five RFC 8446 suites, and an unknown or misspelled one makes
+  `Listen` raise, naming it, because OpenSSL would silently drop it. A correctly
+  spelled suite that your OpenSSL build does not include is still dropped
+  silently; mORMot2 offers no way to read the list back. With an **older
+  mORMot2**, a non-empty value makes `Listen` raise instead (as in v1.0.11),
+  rather than leave TLS 1.3 at the defaults while the configuration says
+  otherwise. Empty keeps mORMot2's default suites.
 - See [`tests/TLS-TESTS.md`](tests/TLS-TESTS.md) for the one-way + mutual-TLS
   integration test (`HorseMormotTLSTestServer` / `…Client`).
 

@@ -111,11 +111,14 @@ type
     // configures separately (see SSLCipherSuitesTLS13).
     SSLCipherList:  string;
 
-    // TLS 1.3 cipher SUITES. Present so the TLS settings read the same on every
-    // provider, but mORMot2's TNetTlsContext has no way to apply them (no
-    // SSL_CTX_set_ciphersuites binding), so a NON-EMPTY value makes Listen
-    // raise rather than serve TLS 1.3 with OpenSSL's default suites while the
-    // configuration says otherwise. Leave it empty. [MORMOT-TLS13-SUITES-1]
+    // TLS 1.3 cipher SUITES, colon-separated exact IANA names in priority order,
+    // e.g. 'TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256'. Empty -> mORMot2
+    // default suites. Applied through TNetTlsContext.CipherSuites
+    // (SSL_CTX_set_ciphersuites, OpenSSL engine) with mORMot2 2.4.16916 or later;
+    // every name is checked at Listen against the five RFC 8446 suites and an
+    // unknown one makes Listen raise, because OpenSSL drops it silently.
+    // [MORMOT-TLS13-SUITES-2] With an older mORMot2 a non-empty value makes
+    // Listen raise instead, as mORMot2 cannot apply it. [MORMOT-TLS13-SUITES-1]
     SSLCipherSuitesTLS13: string;
 
     class function Default: THorseMormotConfig; static;

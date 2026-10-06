@@ -6,9 +6,11 @@ REM
 REM  Runs HorseMormotTLSTestServer + HorseMormotTLSTestClient in two passes:
 REM    1. one-way TLS  (no argument)   -> T1, T2
 REM    2. mutual TLS   (mtls argument) -> T3, T4
-REM  then a third pass that needs no client:
-REM    3. TLS 1.3 suites refused (MORMOT-TLS13-SUITES-1) -> S1. mORMot2 cannot
-REM       apply SSLCipherSuitesTLS13, so a server given one must NOT start.
+REM  then a third pass whose peer is openssl s_client, not our client:
+REM    3. TLS 1.3 cipher suites (MORMOT-TLS13-SUITES-2) -> C0..C5: the
+REM       configured suite is negotiated, an excluded one refused, TLS 1.2
+REM       untouched, and a misspelled or unknown suite stops Listen. Needs
+REM       openssl.exe on PATH; without it the pass is VOID, not passed.
 REM
 REM  Usage:  run-tls-tests.bat            (build first with build-tls-dcc.bat)
 REM  Exit code: 0 = all passed, N = N failed assertions, 2 = VOID (nothing ran).
@@ -93,7 +95,7 @@ echo.
 echo ===========================================================================
 if "%VOIDED%"=="1" goto :report_void
 if not "%TOTAL%"=="0" goto :report_fail
-echo  ALL PASSED [backend !BACKEND_LABEL!] - one-way TLS, mutual TLS, TLS 1.3 suites refused, TLS backend verified.
+echo  ALL PASSED [backend !BACKEND_LABEL!] - one-way TLS, mutual TLS, TLS 1.3 suites C0-C5, TLS backend verified.
 echo ===========================================================================
 exit /b 0
 :report_fail
@@ -201,19 +203,57 @@ echo    -----------------------
 exit /b 0
 
 REM ---------------------------------------------------------------------------
-REM Pass 3 - SSLCipherSuitesTLS13 is REFUSED (MORMOT-TLS13-SUITES-1). Passes 1
-REM and 2 are the control: the same server, with the field empty, started and
-REM served. PASS needs three things at once: the server never binds, its log
-REM shows the OpenSSL backend loaded (so OpenSSL did not stop it), and the log
-REM names the field (so OUR refusal stopped it). A server that comes up is the
-REM defect: TLS 1.3 served with suites the configuration did not ask for.
+REM Pass 3 - TLS 1.3 cipher suites (MORMOT-TLS13-SUITES-2), peer = openssl
+REM s_client, not our client. With mORMot2 2.4.16916+ SSLCipherSuitesTLS13 is
+REM APPLIED (TNetTlsContext.CipherSuites -> SSL_CTX_set_ciphersuites) after the
+REM provider checks every name against the five RFC 8446 suites. Judged by the
+REM s_client exit code plus its "Cipher is <suite>" line. C0 is the control: the
+REM default server must serve the AES-128-GCM client that the restricted server
+REM must refuse in C2. C3: restricting TLS 1.3 leaves TLS 1.2 alone. C4/C5 are
+REM startup refusals: a server that comes up is the defect (a typo dropped by
+REM OpenSSL, served silently), and the log must name the cause. Mirrors
+REM horse-provider-ics pass 4. Built against an OLDER mORMot2 the provider
+REM refuses every non-empty value instead (MORMOT-TLS13-SUITES-1), so C1-C3 FAIL
+REM there with "never bound" - rebuild against the current mORMot2.
 :runsuites
 echo.
 echo ===========================================================================
-echo  TLS pass: TLS 1.3 cipher suites must be refused
+echo  TLS pass: TLS 1.3 cipher suites  (openssl s_client peer)
 echo ===========================================================================
-set "ARG=suites13"
-set "LOG=%BIN%\tls-suites13.log"
+set "OPENSSL="
+for /f "delims=" %%I in ('where openssl.exe 2^>nul') do if not defined OPENSSL set "OPENSSL=%%I"
+if not defined OPENSSL goto :cs_noopenssl
+set /a CSFAIL=0
+
+call :cs_server "" control13
+if "!SRVPID!"=="" goto :cs_end
+call :cs_expect "-tls1_3 -ciphersuites TLS_AES_128_GCM_SHA256" ok "Cipher is TLS_AES_128_GCM_SHA256" "C0 control: default server serves a TLS 1.3 AES-128-GCM client"
+call :cs_stop
+
+call :cs_server "suites13" suites13
+if "!SRVPID!"=="" goto :cs_end
+call :cs_expect "-tls1_3 -ciphersuites TLS_CHACHA20_POLY1305_SHA256" ok "Cipher is TLS_CHACHA20_POLY1305_SHA256" "C1 suites13: the configured suite is negotiated"
+call :cs_expect "-tls1_3 -ciphersuites TLS_AES_128_GCM_SHA256" refused "" "C2 suites13: an excluded suite is REFUSED"
+call :cs_expect "-tls1_2" ok "New, TLSv1.2" "C3 suites13: TLS 1.2 is untouched by the TLS 1.3 setting"
+call :cs_stop
+
+call :cs_refusal "suites13typo" suites13typo "TLS_AES_256_GCM_SHA348" "C4 a misspelled suite beside a valid one: Listen refuses, naming it"
+call :cs_refusal "suites13bad" suites13bad "TLS_NO_SUCH_SUITE" "C5 no valid suite at all: Listen refuses, naming it"
+
+:cs_end
+exit /b !CSFAIL!
+
+:cs_noopenssl
+echo    [VOID] openssl.exe is not on PATH - TLS 1.3 suites were NOT
+echo           exercised. Add an OpenSSL bin directory to PATH and re-run.
+set "VOIDED=1"
+exit /b 0
+
+REM cs_server <arg> <logname> - start a server and wait for it to bind.
+:cs_server
+set "SRVPID="
+set "ARG=%~1"
+set "LOG=%BIN%\tls-%~2.log"
 set "OWNER="
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":%TLS_PORT% " ^| findstr /I "LISTENING"') do set "OWNER=%%P"
 if not "!OWNER!"=="" goto :port_busy
@@ -222,45 +262,98 @@ pushd "%BIN%"
 start "" /B cmd /c ""%SERVER_EXE%" !ARG! > "!LOG!" 2>&1"
 popd
 set /a TRIES=0
-:s_wait
+:cs_wait
+for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":%TLS_PORT% " ^| findstr /I "LISTENING"') do set "SRVPID=%%P"
+if not "!SRVPID!"=="" goto :cs_bound
+set /a TRIES+=1
+if !TRIES! GEQ 20 goto :cs_nobind
+ping -n 2 127.0.0.1 >nul 2>&1
+goto :cs_wait
+:cs_bound
+echo    server [%~2] pid !SRVPID! listening on port %TLS_PORT%
+exit /b 0
+:cs_nobind
+echo    FAIL  server [%~2] never bound port %TLS_PORT%
+call :dumplog
+set /a CSFAIL+=1
+exit /b 0
+
+REM cs_stop - kill the server by PID and wait until the port is free again.
+:cs_stop
+taskkill /PID !SRVPID! /F /T >nul 2>&1
+set /a TRIES=0
+:cs_stop_wait
+set "OWNER="
+for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":%TLS_PORT% " ^| findstr /I "LISTENING"') do set "OWNER=%%P"
+if "!OWNER!"=="" exit /b 0
+set /a TRIES+=1
+if !TRIES! GEQ 10 exit /b 0
+ping -n 2 127.0.0.1 >nul 2>&1
+goto :cs_stop_wait
+
+REM cs_expect <s_client args> <ok|refused> <line expected when ok> <label>
+:cs_expect
+"!OPENSSL!" s_client -connect 127.0.0.1:%TLS_PORT% %~1 < nul > "%BIN%\suites-s_client.log" 2>&1
+set "CSRC=!ERRORLEVEL!"
+if /I "%~2"=="ok" goto :cs_expect_ok
+if "!CSRC!"=="0" goto :cs_expect_bad
+echo    PASS  %~4
+exit /b 0
+:cs_expect_ok
+if not "!CSRC!"=="0" goto :cs_expect_bad
+findstr /L /C:"%~3" "%BIN%\suites-s_client.log" >nul 2>&1
+if errorlevel 1 goto :cs_expect_bad
+echo    PASS  %~4
+exit /b 0
+:cs_expect_bad
+echo    FAIL  %~4  [s_client exit !CSRC!; see %BIN%\suites-s_client.log]
+set /a CSFAIL+=1
+exit /b 0
+
+REM cs_refusal <arg> <logname> <text the refusal must contain> <label>
+REM PASS only when the server never binds AND its log names the cause. A bad
+REM HORSE_MORMOT_TEST_BACKEND also stops the server first: that is VOID.
+:cs_refusal
+set "ARG=%~1"
+set "LOG=%BIN%\tls-%~2.log"
+set "OWNER="
+for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":%TLS_PORT% " ^| findstr /I "LISTENING"') do set "OWNER=%%P"
+if not "!OWNER!"=="" goto :port_busy
+del /q "!LOG!" >nul 2>&1
+pushd "%BIN%"
+start "" /B cmd /c ""%SERVER_EXE%" !ARG! > "!LOG!" 2>&1"
+popd
+set /a TRIES=0
+:cs_ref_wait
 ping -n 2 127.0.0.1 >nul 2>&1
 set "SRVPID="
 for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":%TLS_PORT% " ^| findstr /I "LISTENING"') do set "SRVPID=%%P"
-if not "!SRVPID!"=="" goto :s_served
-findstr /L /C:"Fatal:" "!LOG!" >nul 2>&1
-if not errorlevel 1 goto :s_exited
-set /a TRIES+=1
-if !TRIES! GEQ 10 goto :s_silent
-goto :s_wait
-:s_exited
-REM  A bad HORSE_MORMOT_TEST_BACKEND stops the server before it reaches the
-REM  field under test: that is VOID, not a failed refusal.
+if not "!SRVPID!"=="" goto :cs_ref_served
 findstr /L /C:"HORSE_MORMOT_TEST_BACKEND=" "!LOG!" >nul 2>&1
-if not errorlevel 1 goto :s_badbackend
-findstr /L /C:"TLS backend: OpenSSL" "!LOG!" >nul 2>&1
-if errorlevel 1 goto :s_wrongcause
-findstr /L /C:"SSLCipherSuitesTLS13" "!LOG!" >nul 2>&1
-if errorlevel 1 goto :s_wrongcause
-echo    PASS  S1 suites13: Listen refuses SSLCipherSuitesTLS13, naming it
+if not errorlevel 1 goto :cs_ref_badbackend
+findstr /L /C:"%~3" "!LOG!" >nul 2>&1
+if not errorlevel 1 goto :cs_ref_ok
+set /a TRIES+=1
+if !TRIES! GEQ 10 goto :cs_ref_silent
+goto :cs_ref_wait
+:cs_ref_ok
+echo    PASS  %~4
 exit /b 0
-:s_served
-echo    FAIL  S1 suites13: the server STARTED - TLS 1.3 suites accepted but not applied
-taskkill /PID !SRVPID! /F /T >nul 2>&1
-exit /b 1
-:s_wrongcause
-echo    FAIL  S1 suites13: the server stopped, but not with the expected refusal
-call :dumplog
-exit /b 1
-:s_badbackend
-echo    [VOID] S1 suites13: the server refused HORSE_MORMOT_TEST_BACKEND, so the
-echo           TLS 1.3 refusal was never reached.
+:cs_ref_served
+echo    FAIL  %~4  [the server STARTED - the suite list was accepted]
+call :cs_stop
+set /a CSFAIL+=1
+exit /b 0
+:cs_ref_badbackend
+echo    [VOID] %~4 - the server refused HORSE_MORMOT_TEST_BACKEND first
 call :dumplog
 set "VOIDED=1"
 exit /b 0
-:s_silent
-echo    FAIL  S1 suites13: no listener and no Fatal line within 10 tries
+:cs_ref_silent
+echo    FAIL  %~4  [no listener, but the log does not contain "%~3"]
 call :dumplog
-exit /b 1
+set /a CSFAIL+=1
+exit /b 0
 
 :build_failed
 echo.

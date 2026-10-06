@@ -192,7 +192,7 @@ netsh http add urlacl url=http://+:9202/ user=%USERNAME%
 | one-way | T2 `POST /echo` → body echoed | request body survives the TLS path |
 | mTLS | T3 `GET /ping` **with** client cert → 200 | `ClientCertificateAuthentication` accepts a CA-signed cert |
 | mTLS | T4 `GET /ping` **without** client cert → rejected | mTLS is enforced (peer without cert refused) |
-| TLS 1.3 suites | S1 server `suites13` → **does not start**; its log shows the OpenSSL backend loaded AND names `SSLCipherSuitesTLS13` | mORMot2 cannot apply TLS 1.3 suites, so the provider refuses them (MORMOT-TLS13-SUITES-1, v1.0.11). Passes 1-2 are the control: the same server with the field empty starts and serves |
+| TLS 1.3 suites (pass 3, `openssl s_client` peer) | **C0** control: the default server serves a TLS 1.3 client offering only AES-128-GCM · **C1** `suites13` (ChaCha20 only): `Cipher is TLS_CHACHA20_POLY1305_SHA256` · **C2** the same server REFUSES the AES-128-GCM-only client · **C3** TLS 1.2 still served · **C4** `suites13typo` (`…SHA348` beside a valid suite) and **C5** `suites13bad` → the server **does not start** and its log names the bad suite | With mORMot2 2.4.16916+ the provider APPLIES `SSLCipherSuitesTLS13` through `TNetTlsContext.CipherSuites` after checking every name against the five RFC 8446 suites (MORMOT-TLS13-SUITES-2), because OpenSSL silently drops a typo beside a valid name. Needs `openssl.exe` on PATH, else VOID. Built against an older mORMot2 the provider refuses every non-empty value instead (MORMOT-TLS13-SUITES-1), and C1-C3 fail with "never bound". |
 
 The mTLS client certificate is injected by subclassing `TCrossHttpClient` and
 overriding `CreateHttpCli`.
