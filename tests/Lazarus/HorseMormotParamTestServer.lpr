@@ -15,7 +15,9 @@ program HorseMormotParamTestServer;
   Route handlers are plain unit-scope procedures (NOT anonymous procedures) so
   the project compiles on stock FPC without HORSE_FPC_FUNCTIONREFERENCES — the
   same pattern as Horse.BenchRoutes.pas.  Register with no '@' so FPC's
-  {$MODE DELPHI} promotes the procedure to THorseCallbackRequestResponse.
+  Delphi mode promotes the procedure to THorseCallbackRequestResponse.
+  (Never write a compiler directive inside this brace comment: its closing
+  brace ends the comment early. That is what kept this file from compiling.)
 
   Leak detection on FPC is done with heaptrc (compile with -gh), not with
   ReportMemoryLeaksOnShutdown (which is Delphi-only).
@@ -31,7 +33,7 @@ program HorseMormotParamTestServer;
 {$APPTYPE CONSOLE}
 
 uses
-  {$IFDEF UNIX} BaseUnix, {$ENDIF}
+  {$IFDEF UNIX} cthreads, BaseUnix, {$ENDIF}   // cthreads FIRST: FPC's RTL has no thread manager without it
   SysUtils,
   Classes,
   Horse,
