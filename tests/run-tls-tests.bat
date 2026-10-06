@@ -65,6 +65,15 @@ if errorlevel 1 goto :build_failed
 echo.
 :skip_build
 
+REM -- Backend under test (B7). HORSE_MORMOT_TEST_BACKEND = threadpool, async or
+REM    httpapi is read by the SERVER (HorseMormotTestBackend.pas); unset keeps
+REM    the define-selected default. http.sys takes no TLS fields - the provider
+REM    refuses SSLEnabled on it - so this suite does not apply there.
+set "BACKEND=%HORSE_MORMOT_TEST_BACKEND%"
+if "!BACKEND!"=="" (set "BACKEND_LABEL=default") else (set "BACKEND_LABEL=!BACKEND!")
+echo backend: !BACKEND_LABEL!
+if /I "!BACKEND!"=="httpapi" goto :httpapi_na
+
 if not exist "%SERVER_EXE%" goto :not_built
 if not exist "%CLIENT_EXE%" goto :not_built
 if not exist "%BIN%\certs\server.crt" goto :no_certs
@@ -84,7 +93,7 @@ echo.
 echo ===========================================================================
 if "%VOIDED%"=="1" goto :report_void
 if not "%TOTAL%"=="0" goto :report_fail
-echo  ALL PASSED - one-way TLS, mutual TLS, TLS 1.3 suites refused, TLS backend verified.
+echo  ALL PASSED [backend !BACKEND_LABEL!] - one-way TLS, mutual TLS, TLS 1.3 suites refused, TLS backend verified.
 echo ===========================================================================
 exit /b 0
 :report_fail
@@ -140,6 +149,14 @@ REM    back or never got that far, and every assertion below would be noise.
 findstr /C:"TLS backend: OpenSSL" "!LOG!" >nul 2>&1
 if errorlevel 1 goto :no_backend
 
+REM -- And the server must be running the mORMot backend that was asked for.
+REM    A binary built before HorseMormotTestBackend existed ignores the variable
+REM    and would report a threadpool result as an async one.
+if not "!BACKEND!"=="" (
+  findstr /I /L /C:"backend: !BACKEND! " "!LOG!" >nul 2>&1
+  if errorlevel 1 goto :wrong_backend
+)
+
 "%CLIENT_EXE%" !ARG!
 set "PASS_EXIT=!ERRORLEVEL!"
 
@@ -164,6 +181,14 @@ exit /b 0
 echo    [VOID] server never reported an OpenSSL TLS backend.
 echo           Rebuild with build-tls-dcc.bat - FORCE_OPENSSL plus
 echo           libcrypto-3-x64.dll / libssl-3-x64.dll beside the binary.
+call :dumplog
+taskkill /PID !SRVPID! /F /T >nul 2>&1
+set "VOIDED=1"
+exit /b 0
+
+:wrong_backend
+echo    [VOID] HORSE_MORMOT_TEST_BACKEND=!BACKEND! but the server did not report
+echo           "backend: !BACKEND!". Rebuild - the binary predates the selector.
 call :dumplog
 taskkill /PID !SRVPID! /F /T >nul 2>&1
 set "VOIDED=1"
@@ -208,6 +233,10 @@ set /a TRIES+=1
 if !TRIES! GEQ 10 goto :s_silent
 goto :s_wait
 :s_exited
+REM  A bad HORSE_MORMOT_TEST_BACKEND stops the server before it reaches the
+REM  field under test: that is VOID, not a failed refusal.
+findstr /L /C:"HORSE_MORMOT_TEST_BACKEND=" "!LOG!" >nul 2>&1
+if not errorlevel 1 goto :s_badbackend
 findstr /L /C:"TLS backend: OpenSSL" "!LOG!" >nul 2>&1
 if errorlevel 1 goto :s_wrongcause
 findstr /L /C:"SSLCipherSuitesTLS13" "!LOG!" >nul 2>&1
@@ -222,6 +251,12 @@ exit /b 1
 echo    FAIL  S1 suites13: the server stopped, but not with the expected refusal
 call :dumplog
 exit /b 1
+:s_badbackend
+echo    [VOID] S1 suites13: the server refused HORSE_MORMOT_TEST_BACKEND, so the
+echo           TLS 1.3 refusal was never reached.
+call :dumplog
+set "VOIDED=1"
+exit /b 0
 :s_silent
 echo    FAIL  S1 suites13: no listener and no Fatal line within 10 tries
 call :dumplog
@@ -233,6 +268,11 @@ echo ===========================================================================
 echo  VOID - the build failed, so nothing was tested. This is NOT a test
 echo         failure; fix the build error above and run again.
 echo ===========================================================================
+exit /b 2
+:httpapi_na
+echo VOID - this suite does not apply to httpapi: http.sys binds certificates
+echo        through netsh, and the provider refuses SSLEnabled on that backend.
+echo        Run it with HORSE_MORMOT_TEST_BACKEND unset, threadpool or async.
 exit /b 2
 :not_built
 echo ERROR: the TLS test binaries are not built. Run:

@@ -152,7 +152,8 @@ uses
   Horse,
   Horse.Commons,
   Horse.Provider.Mormot.Config,
-  Horse.Provider.Mormot;
+  Horse.Provider.Mormot,
+  HorseMormotTestBackend;   // HORSE_MORMOT_TEST_BACKEND (B7)
 
 const
   PORT            = 9202;
@@ -413,7 +414,14 @@ begin
 
   Writeln;
   Writeln('        -> reading:');
-  if (GPipelineHits = 0) and (GReadyStatus > 0) and (GReadyBody <> 'pong') then
+  // A failed Listen explains everything below it, and the routing readings
+  // would only mislead (B7's first httpapi run blamed the router for a missing
+  // http.sys URL reservation).
+  if GListenError <> '' then
+    Writeln('           the server NEVER STARTED - ListenWithConfig raised, see '
+          + 'above. The counters are zero because nothing listened; fix the '
+          + 'startup error, not routing.')
+  else if (GPipelineHits = 0) and (GReadyStatus > 0) and (GReadyBody <> 'pong') then
     Writeln('           SOMEONE ELSE ANSWERED. Horse''s router was never entered and '
           + 'the reply is not ours, so the port belongs to another program. Check '
           + 'the owner before reading this as a provider defect.')
@@ -732,6 +740,10 @@ begin
 
     LConfig                := THorseMormotConfig.Default;
     LConfig.DrainTimeoutMs := DRAIN_CFG_MS;
+    // Raises on an unknown value; the outer handler then exits 2 (VOID).
+    ApplyTestBackend(LConfig);
+    Writeln(Format('  backend: %s', [BackendName(LConfig.ServerKind)]));
+    Writeln;
 
     LDriver := TDriverThread.Create;
 

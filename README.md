@@ -4,7 +4,7 @@ mORMot2 transport provider for the [Horse](https://github.com/HashLoad/horse) we
 
 ## Status
 
-> **Working provider, released.** Currently **v1.0.10**. Requests, cookies, multipart,
+> **Working provider, released.** Currently **v1.0.12**. Requests, cookies, multipart,
 > `SendFile`/`Download`, `Req.RawWebRequest`/`Res.RawWebResponse`, TLS/mTLS and graceful
 > shutdown all work; the test suite runs 124/124 on Delphi / Windows.
 >
@@ -13,9 +13,9 @@ mORMot2 transport provider for the [Horse](https://github.com/HashLoad/horse) we
 >
 > Two things to know before adopting it: TLS was silently serving **plain TCP** until
 > v1.0.9 (FIX-MORMOT-TLS-1 — `hsoEnableTls` must be passed to the server *constructor*),
-> so use v1.0.9 or later for HTTPS; and graceful shutdown loses the in-flight reply in
-> roughly 1 run in 80, an open defect described under
-> [Graceful shutdown](#graceful-shutdown).
+> so use v1.0.9 or later for HTTPS; and on the http.sys backend (`mskHttpApi`) graceful
+> shutdown lost the in-flight reply on **every** run until v1.0.12 (FIX-MORMOT-GRACEFUL-2),
+> so use v1.0.12 or later there. See [Graceful shutdown](#graceful-shutdown).
 
 ## Activation
 
@@ -201,14 +201,40 @@ not the same call as `StopListen`, which is abrupt and unchanged.
 THorse.StopListenGraceful(5000);   // wait up to 5 s for in-flight work
 ```
 
-Implemented in **provider v1.0.10** (FIX-MORMOT-GRACEFUL-1). Measured: 735-752 ms for
-700 ms of remaining work.
+Implemented in **provider v1.0.10** (FIX-MORMOT-GRACEFUL-1), completed for http.sys in
+**v1.0.12** (FIX-MORMOT-GRACEFUL-2). Measured: 735-752 ms for 700 ms of remaining work.
+
+Verified on **all three backends** (2026-10-06, Windows / Delphi 12, v1.0.12):
+
+| Backend | Reply delivered |
+|---|---|
+| `mskThreadPool` | 60/60 |
+| `mskAsync` | 60/60 |
+| `mskHttpApi` | 20/20 (0/11 before v1.0.12) |
+
+Each test server in `tests/` takes the backend from `HORSE_MORMOT_TEST_BACKEND`
+(`threadpool`, `async` or `httpapi`), so any gate can be repeated per backend without a
+rebuild; see `tests/TLS-TESTS.md`.
 
 This provider performs **all three** steps the framework asks for — stop accepting,
 drain, tear down — because `THttpServerGeneric.Shutdown` sets a flag without closing a
 single socket. After it, `Request()` answers **404 to new requests** while in-flight ones
 keep their thread and socket. (The 404 is mORMot's own choice; 503 would be better and
 would have to come from Horse's pipeline.)
+
+### What was wrong on http.sys before v1.0.12
+
+The drain counted a request as finished when Horse's pipeline returned, which is
+inside mORMot's `OnRequest`, **before** mORMot sends the reply. On the socket backends
+that gap is harmless, because their destructors join the worker threads before closing
+anything. `THttpApiServer`'s teardown is the other way round: it closes the http.sys
+request queue first, which aborts a response still being sent. So on `mskHttpApi` the
+drain finished on time (~700 ms) and the client then got WinHTTP error 12030 on every run.
+
+v1.0.12 also waits for mORMot's own `CurrentProcess` count, which every backend
+decrements only **after** the send, bounded by the same caller timeout. No delay was
+added. A 100 ms settle on the old code also delivered 20/20, which confirmed the
+cause before the fix was tested.
 
 ### What was wrong before v1.0.10
 
@@ -223,12 +249,14 @@ wrong; the order was.
 runs with a 0 ms settle against 60 with 100 ms came back 60/60 both ways, so the default
 stays at 0. `HORSE_MORMOT_SETTLE_MS` exists for characterisation only.
 
-### Known open defect
+### The one unexplained loss (v1.0.10)
 
-The reply is delivered in **79 of 80** runs. The single loss is unexplained — elapsed was
-normal at 749 ms, so the drain timing was right and the reply still did not arrive. Point
-estimate ~1.25%; 60 clean runs rule out 5% but not 1%. The settle A/B above shows the
-settle is *not* the cause, so no delay was added on no evidence.
+On v1.0.10 the thread-pool backend delivered the reply in **79 of 80** runs. The single
+loss is unexplained: elapsed was normal at 749 ms, so the drain timing was right, and the
+reply still did not arrive. It has not recurred in 60 runs on v1.0.12. FIX-MORMOT-GRACEFUL-2
+closes a gap of the same shape (counter at zero before the send), but that this was the
+cause is **not proven**. A 1-in-80 event can miss 60 runs by chance (about 47%), so treat it
+as open.
 
 `tests/run-drain-batch.bat [RUNS] [SETTLE_MS]` is the detector: it counts pass/fail/void
 and saves each failing run as `fail-N.log`, because an intermittent is only diagnosable

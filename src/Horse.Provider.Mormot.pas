@@ -172,6 +172,9 @@ type
 implementation
 
 uses
+{$IF NOT DEFINED(FPC)}
+  System.Diagnostics,        // TStopwatch - MonotonicMs [FIX-MORMOT-GRACEFUL-2]
+{$ENDIF}
   Horse,
   Horse.Commons,
   mormot.net.sock,           // RemoteIPLocalHostAsVoidInServers
@@ -190,6 +193,19 @@ var
   // "just in case" would hide whether it is needed. Override with
   // HORSE_MORMOT_SETTLE_MS to characterise the gap without a rebuild.
   GGracefulSettleMs: Integer = -1;
+
+// [FIX-MORMOT-GRACEFUL-2] Monotonic milliseconds, for bounding the send wait by
+// the caller's timeout. FPC: SysUtils.GetTickCount64. Delphi: TStopwatch, since
+// System.SysUtils has no GetTickCount64 and mormot.core.os would add a large
+// unit to this implementation scope for one call.
+function MonotonicMs: Int64;
+begin
+  {$IF DEFINED(FPC)}
+  Result := Int64(GetTickCount64);
+  {$ELSE}
+  Result := (TStopwatch.GetTimeStamp * 1000) div TStopwatch.Frequency;
+  {$ENDIF}
+end;
 
 function GracefulSettleMs: Integer;
 var
@@ -508,10 +524,12 @@ class procedure THorseProviderMormot.StopListenGraceful(const ATimeoutMS: Intege
 var
   LTimeout: Integer;
   LSettle:  Integer;
+  LStartMs: Int64;
 begin
   TriggerBeforeStop;
   SetIsShuttingDown(True);
   try
+    LStartMs := MonotonicMs;
     LTimeout := ATimeoutMS;
     if LTimeout <= 0 then
       LTimeout := FConfig.DrainTimeoutMs;
@@ -532,6 +550,27 @@ begin
     {$ENDIF}
       if Assigned(FDrainEvent) then
         FDrainEvent.WaitFor(LTimeout);
+
+    // 2b. [FIX-MORMOT-GRACEFUL-2] Wait for mORMot to finish SENDING, not just
+    //     for our pipeline to return. FActiveRequests drops in ExecutePipeline's
+    //     finally, i.e. inside OnRequest, BEFORE the backend transmits the
+    //     reply. On the socket backends freeing early was harmless (79/80
+    //     threadpool, 60/60 async): their destructors join the worker threads
+    //     before closing anything. THttpApiServer.DestroyMainThread does not -
+    //     it CloseHandle()s the http.sys request queue first, which aborts a
+    //     response still in HttpSendHttpResponse. Measured 2026-10-05 (B7): on
+    //     mskHttpApi the reply was lost on EVERY run, WinHTTP 12030 at ~1510 ms,
+    //     with the drain itself on time (~700 ms for 700 ms of work).
+    //     CurrentProcess is mORMot's own count of responses being computed OR
+    //     transmitted; every backend decrements it only after the send
+    //     (mormot.net.server.pas, THttpServer.Process and THttpApiServer.Execute;
+    //     mormot.net.async.pas for the async server). Bounded by the same
+    //     caller timeout, measured from entry. Idle keep-alive connections are
+    //     not counted, so an idle client cannot hold this open.
+    if Assigned(FServer) then
+      while (FServer.CurrentProcess > 0) and
+            (MonotonicMs - LStartMs < LTimeout) do
+        Sleep(5);
 
     // 3. Settle window, DEFAULT 0 and deliberately so. mORMot writes the
     //    response from the request thread after ExecutePipeline returns, and the

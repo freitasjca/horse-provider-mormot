@@ -16,6 +16,8 @@ program HorseMormotTLSTestServer;
   TLS applies to the socket backends (mskThreadPool default, mskAsync). The
   http.sys backend (mskHttpApi) configures TLS at the OS level and rejects
   SSLEnabled at Listen time — so this test uses the default socket backend.
+  Set HORSE_MORMOT_TEST_BACKEND=async to run it on mskAsync instead: the
+  backend where hsoEnableTls only works through the constructor (B7).
 
   Two modes, selected by the first command-line argument:
 
@@ -74,7 +76,8 @@ uses
   Horse,
   Horse.Commons,
   Horse.Provider.Mormot.Config,    // THorseMormotConfig
-  Horse.Provider.Mormot;
+  Horse.Provider.Mormot,
+  HorseMormotTestBackend;          // HORSE_MORMOT_TEST_BACKEND (B7)
 
 const
   TLS_PORT = 9201;
@@ -129,6 +132,7 @@ begin
     CertDir := FindCertDir;
 
     Config                := THorseMormotConfig.Default;
+    ApplyTestBackend(Config);        // raises on an unknown value
     Config.SSLEnabled     := True;
     Config.SSLCertFile    := CertDir + 'server.crt';
     Config.SSLPrivKeyFile := CertDir + 'server.key';
@@ -148,6 +152,7 @@ begin
     RegisterRoutes;
 
     Writeln(Format('[MormotTLSTest] certs: %s', [CertDir]));
+    Writeln(Format('[MormotTLSTest] backend: %s', [BackendName(Config.ServerKind)]));
     Writeln(Format('[MormotTLSTest] mode : %s',
       [IfThen(MTLS, 'mutual TLS (client cert required)', 'one-way TLS')]));
     // Say WHICH TLS backend is live, and refuse to start on the one that

@@ -32,7 +32,9 @@ uses
   System.SysUtils,
   Horse,
   Horse.Provider.Mormot,
-  Horse.Mormot.TestRoutes in 'Common\Horse.Mormot.TestRoutes.pas';
+  Horse.Provider.Mormot.Config,
+  Horse.Mormot.TestRoutes in 'Common\Horse.Mormot.TestRoutes.pas',
+  HorseMormotTestBackend in '..\..\tests\HorseMormotTestBackend.pas';   // B7
 
 function CtrlHandler(dwCtrlType: DWORD): BOOL; stdcall;
 begin
@@ -48,6 +50,8 @@ begin
   end;
 end;
 
+var
+  LConfig: THorseMormotConfig;
 begin
   SetConsoleCtrlHandler(@CtrlHandler, True);
 
@@ -55,9 +59,16 @@ begin
 
   WriteLn(Format('[HorseMormotTest · Delphi/Console] Listening on http://127.0.0.1:%d',
     [TEST_PORT]));
+  // HORSE_MORMOT_TEST_BACKEND = threadpool | async | httpapi picks the mORMot
+  // backend without a rebuild; unset, this is exactly what THorse.Listen used
+  // (InternalListen with THorseMormotConfig.Default). An unknown value raises.
+  LConfig := THorseMormotConfig.Default;
+  ApplyTestBackend(LConfig);
+  WriteLn(Format('[HorseMormotTest · Delphi/Console] backend: %s',
+    [BackendName(LConfig.ServerKind)]));
   WriteLn('Press Ctrl-C to stop.');
 
-  THorse.Listen(TEST_PORT);
+  THorseProviderMormot.ListenWithConfig(TEST_PORT, LConfig);
 
   WriteLn('[HorseMormotTest · Delphi/Console] Stopped cleanly.');
 end.
