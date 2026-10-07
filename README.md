@@ -4,9 +4,9 @@ mORMot2 transport provider for the [Horse](https://github.com/HashLoad/horse) we
 
 ## Status
 
-> **Working provider, released.** Currently **v1.0.14**. Requests, cookies, multipart,
+> **Working provider, released.** Currently **v1.0.15**. Requests, cookies, multipart,
 > `SendFile`/`Download`, `Req.RawWebRequest`/`Res.RawWebResponse`, TLS/mTLS and graceful
-> shutdown all work; the integration suite runs 126/126 on Delphi / Windows on the default
+> shutdown all work; the integration suite runs 128/128 on Delphi / Windows on the default
 > thread-pool backend. The http.sys backend has limits of its own: see
 > [http.sys backend limitations](#httpsys-backend-limitations).
 >
@@ -98,14 +98,25 @@ Define precedence in `THorseMormotConfig.Default`: `HORSE_MORMOT_HTTPAPI` (Windo
 
 ### Integration results per backend
 
-The same 126-check integration suite (`samples/tests`) on each backend, 2026-10-06,
+The same 128-check integration suite (`samples/tests`) on each backend, 2026-10-06,
 Windows / Delphi 12, mORMot2 `fd5b340`:
 
 | Backend | Result | What fails |
 |---|---|---|
-| `mskThreadPool` | **126/126** | — |
-| `mskAsync` | 125/126 | `RemoteAddr` is empty for a **loopback** client: mORMot2's async server always reports 127.0.0.1 as empty, ignoring `RemoteIPLocalHostAsVoidInServers` ([mORMot2#639](https://github.com/synopse/mORMot2/issues/639)). Remote clients are unaffected. |
-| `mskHttpApi` | 118/126 | See below |
+| `mskThreadPool` | **128/128** | — |
+| `mskAsync` | 127/128 | `RemoteAddr` is empty for a **loopback** client: mORMot2's async server always reports 127.0.0.1 as empty, ignoring `RemoteIPLocalHostAsVoidInServers` ([mORMot2#639](https://github.com/synopse/mORMot2/issues/639)). Remote clients are unaffected. |
+| `mskHttpApi` | 120/128 | See below |
+
+### Streaming is not supported
+
+This provider has no streaming engine: `Res.SendStream` (chunked responses, SSE) answers
+**`501 Not Implemented`** with a JSON error, on every backend. Send the whole body with
+`Res.Send`, or use a provider that streams (CrossSocket, nghttp2).
+
+Before v1.0.15, `Res.SendStream` fell back to Horse's WebBroker stream writer, which
+cannot reach the socket through this provider. The client got `200` with an **empty
+body** and no error, while the route believed it had streamed. Integration test 47
+gates the refusal.
 
 ### http.sys backend limitations
 
