@@ -57,6 +57,9 @@ program HorseMormotTestClient;
     46  POST   /echo/body  CHUNKED body       → body echoed intact, OR 411 naming
                                                Content-Length - never 200 with the body
                                                lost (FIX-MORMOT-HTTPSYS-CHUNKED-1)
+    47  GET    /stream/sendstream            → Res.SendStream parts delivered, OR a
+                                               non-2xx refusal - never 2xx with the
+                                               parts lost (SENDSTREAM-PROBE)
 *)
 
 uses
@@ -1236,6 +1239,28 @@ begin
     Check('chunked body delivered intact - not silently empty',
       Pos(CHUNKED_BODY_MARKER, R.Body) > 0, R.Body);
   end;
+
+  // ── 47  Res.SendStream: delivered, or refused loudly - never lost ──────────
+  // [SENDSTREAM-PROBE] The route streams two parts through Res.SendStream, the
+  // Horse streaming API. This provider registers no stream writer of its own,
+  // so Horse uses THorseWebBrokerStreamWriter, which cannot reach the socket
+  // through the hybrid adapter (Delphi: WriteClient is a no-op; FPC: an
+  // abstract SendHeaders). A non-2xx answer is acceptable - the caller learns
+  // streaming is unavailable. A 2xx without both parts is the defect: the app
+  // thinks it streamed and the client got nothing. Two checks on every backend.
+  Section('47  GET /stream/sendstream  (Res.SendStream - delivered, or refused loudly)');
+  DoSync(AClient, 'GET', BASE_URL + '/stream/sendstream', nil, nil, R);
+  if (R.StatusCode >= 200) and (R.StatusCode < 300) then
+    Check('2xx: both streamed parts delivered - not silently lost',
+      (Pos('SENDSTREAM-PART-1;', R.Body) > 0) and (Pos('SENDSTREAM-PART-2', R.Body) > 0),
+      Format('%d / [%s]', [R.StatusCode, R.Body]))
+  else
+    Check('non-2xx: refused loudly (not a timeout)',
+      R.StatusCode >= 400, Format('%d / [%s]', [R.StatusCode, R.Body]));
+  DoSync(AClient, 'GET', BASE_URL + '/ping', nil, nil, R);
+  Check('server healthy after the SendStream probe',
+    (R.StatusCode = 200) and (R.Body = 'pong'),
+    Format('%d / %s', [R.StatusCode, R.Body]));
 
 end;
 
