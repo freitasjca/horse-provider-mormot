@@ -51,6 +51,7 @@ uses
 {$ENDIF}
   Horse,
   Horse.Commons,
+  Horse.Response,   // IHorseStreamWriter (test 47)
   Horse.Core.Param,
   Horse.Core.Param.Field;
 
@@ -108,6 +109,19 @@ begin
   end;
   Result := '{"field":"' + JE(LField) + '","get":"' + JE(LGet)
     + '","again":"' + JE(LAgain) + '"}';
+end;
+
+// [SENDSTREAM-PROBE] Test 47. Two parts through Res.SendStream, the Horse
+// streaming API. This provider registers no stream writer, so Horse falls back
+// to THorseWebBrokerStreamWriter: on Delphi it writes through
+// RawWebRequest.WriteClient, a no-op on the hybrid adapter; on FPC it calls
+// RawWebResponse.SendHeaders, abstract in fcl-web. The client measures what
+// actually happens. A plain unit-level procedure, not an anonymous one, so the
+// unit still compiles on FPC (THorseStreamAnonProc is not a reference type there).
+procedure SendStreamProbeWriter(const AWriter: IHorseStreamWriter);
+begin
+  AWriter.Write('SENDSTREAM-PART-1;');
+  AWriter.Write('SENDSTREAM-PART-2');
 end;
 
 procedure RegisterTestRoutes;
@@ -435,6 +449,16 @@ begin
     begin
       Res.Status(501).ContentType('application/json; charset=utf-8')
          .Send('{"error":"chunked streaming not implemented on mORMot2 transport"}');
+    end
+  );
+
+  // ── [SENDSTREAM-PROBE] Res.SendStream: delivered, or refused loudly ───────
+  // Unlike the three 501 stubs above, this route really calls Res.SendStream.
+  THorse.Get('/stream/sendstream',
+    procedure(Req: THorseRequest; Res: THorseResponse)
+    begin
+      Res.ContentType('text/plain; charset=utf-8');
+      Res.SendStream(SendStreamProbeWriter);
     end
   );
 

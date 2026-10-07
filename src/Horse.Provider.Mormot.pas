@@ -177,6 +177,7 @@ uses
 {$ENDIF}
   Horse,
   Horse.Commons,
+  Horse.Response,            // RegisterStreamWriterFactory [MORMOT-SENDSTREAM-REFUSE-1]
   mormot.net.sock,           // RemoteIPLocalHostAsVoidInServers
   // ── NB: Horse.Constants MUST come after mormot.net.sock — both declare
   // DEFAULT_PORT (Horse: Integer 9000; mORMot: array[boolean] of RawUtf8
@@ -198,6 +199,24 @@ uses
     {$DEFINE HORSE_MORMOT_HAS_TLS13_SUITES}
   {$IFEND}
 {$IFEND}
+
+// [MORMOT-SENDSTREAM-REFUSE-1] Res.SendStream must fail LOUDLY on this provider.
+// It has no streaming engine and registers no stream writer, so Horse used its
+// default THorseWebBrokerStreamWriter, which cannot reach the socket through the
+// hybrid adapter: on Delphi it writes via RawWebRequest.WriteClient (a no-op) and
+// the client got 200 with an EMPTY body while the app believed it had streamed
+// (integration test 47, all three backends, 2026-10-06); on FPC it calls
+// RawWebResponse.SendHeaders, abstract in fcl-web. This factory refuses instead:
+// the EHorseException becomes a 501 JSON error in ExecutePipeline. No double
+// quotes in the message - the pipeline embeds it in JSON unescaped.
+function MormotRefuseStreamWriter(const AResponse: THorseResponse): IHorseStreamWriter;
+begin
+  raise EHorseException.New
+    .Status(THTTPStatus.NotImplemented)
+    .Error('Res.SendStream is not supported by the mORMot provider - send the ' +
+      'whole body with Res.Send, or use a provider with a streaming engine ' +
+      '(CrossSocket, nghttp2)');
+end;
 
 {$IFDEF HORSE_MORMOT_HAS_TLS13_SUITES}
 const
@@ -448,6 +467,14 @@ begin
 
   FConfig := AConfig;
   FPort   := APort;
+
+  // [MORMOT-SENDSTREAM-REFUSE-1] Registered here, at run time, not from a unit
+  // initialization: Horse.Response installs its WebBroker default from ITS
+  // initialization, and unit-initialization order is decided by the compiler's
+  // dependency walk (FIX-STREAM-FACTORY in Horse.Response: on FPC 3.2.2 that
+  // order once made the wrong factory win for nghttp2). Listen always runs
+  // after every initialization, so this registration is the one in effect.
+  THorseResponse.RegisterStreamWriterFactory(MormotRefuseStreamWriter);
 
   if not Assigned(FDrainEvent) then
     FDrainEvent := TEvent.Create(nil, True, True, '');  // manual-reset, signalled
