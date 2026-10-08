@@ -133,23 +133,25 @@ These come from mORMot2's http.sys binding (`THttpApiServer`) or from http.sys i
 from this provider. Two were fixed in mORMot2 after being reported
 ([#637](https://github.com/synopse/mORMot2/issues/637) chunked bodies,
 [#638](https://github.com/synopse/mORMot2/issues/638) `Set-Cookie`), so **use mORMot2
-2.4.17428 or later** with this backend. Prefer `mskThreadPool` or `mskAsync` if any of the
+2.4.17465 or later** with this backend (it also has the #642 and #643 fixes). Prefer `mskThreadPool` or `mskAsync` if any of the
 rest matters to you.
 
 - **Chunked request bodies**, by mORMot2 version:
-  - **2.4.17428 and later:** delivered, as long as `MaxBodyBytes > 0` (the default is 4 MB).
-    With `MaxBodyBytes := 0` mORMot2 refuses **every** chunked body with `413`: its new
-    chunked loop compares against a zero limit
-    ([mORMot2#642](https://github.com/synopse/mORMot2/issues/642)).
+  - **2.4.17428 and later:** delivered, with the default `MaxBodyBytes` (4 MB).
+    On 2.4.17428 to 2.4.17463 only, `MaxBodyBytes := 0` makes mORMot2 refuse **every**
+    chunked body with `413`: its new chunked loop compared against a zero limit
+    ([mORMot2#642](https://github.com/synopse/mORMot2/issues/642), fixed in 2.4.17464).
   - **Earlier:** mORMot2 read a body only when `Content-Length` was present, so a chunked
     body reached the route **empty, with no error**. The provider refuses those with
     `411 Length Required` (since v1.0.13) rather than run the route without its body.
 - **Two `Set-Cookie` headers**: both are sent from mORMot2 2.4.17423. Earlier, http.sys kept
   one slot per known header and only the last cookie arrived.
-- **An oversized upload stalls its keep-alive connection.** mORMot2 answers the `413` without
-  reading the rest of the body or closing the connection. curl aborts the upload and
-  reconnects, so it is unaffected; a client that finishes sending and reuses the connection
-  waits on its next request until it times out. Other connections are served normally
+- **Before mORMot2 2.4.17465, an oversized upload stalled its keep-alive connection.**
+  mORMot2 answered the `413` without reading the rest of the body or closing the
+  connection. curl aborts the upload and reconnects, so it was unaffected; a client that
+  finished sending and reused the connection waited on its next request until it timed
+  out. Other connections were served normally. From 2.4.17465 http.sys closes the
+  connection whenever a request is cut short
   ([mORMot2#643](https://github.com/synopse/mORMot2/issues/643)).
 - **`POST`/`PUT` with no body and no `Content-Length` get `411` from http.sys itself**,
   before the request reaches Horse. Send `Content-Length: 0`.
@@ -165,7 +167,7 @@ Every test server in `tests/` and `samples/tests/` takes the backend from
 |---|---|---|
 | **Delphi** | 10.4 Sydney | `inline var`, `System.Threading` — same baseline as Horse. |
 | **Lazarus / FPC** | **3.2.0** | Unlike the CrossSocket provider (which needs FPC **3.3.1 trunk** for `{$MODESWITCH FUNCTIONREFERENCES}`), mORMot2 has no such requirement. FPC **3.2.2 stable + Lazarus 2.2+** work out of the box. See [Lazarus / FPC IDE setup](#lazarus--fpc-ide-setup) below. |
-| **mORMot2** | latest; **2.4.17428+ for http.sys** | Core units: `mormot.core.base`, `mormot.core.unicode`, `mormot.net.http`, `mormot.net.server`. Validated on 2.4.17458. TLS 1.3 suites need 2.4.16916+; http.sys chunked bodies 2.4.17428+. mORMot2 is not a Boss dependency, so no floor is enforced. |
+| **mORMot2** | latest; **2.4.17465+ for http.sys** | Core units: `mormot.core.base`, `mormot.core.unicode`, `mormot.net.http`, `mormot.net.server`. Validated on 2.4.17458. TLS 1.3 suites need 2.4.16916+; http.sys chunked bodies 2.4.17428+ (2.4.17464+ with `MaxBodyBytes := 0`), http.sys disconnect after an early refusal 2.4.17465+. mORMot2 is not a Boss dependency, so no floor is enforced. |
 | **Horse** | ≥ 3.3.10 | 3.3.0 first carried the `HORSE_PROVIDER_*` namespace (PATCH-HORSE-2). The floor is **3.3.10 from provider v1.0.10**, because `StopListenGraceful` is silently inert through `THorse` on anything earlier — see [Graceful shutdown](#graceful-shutdown). |
 | **OpenSSL** | 1.1.x or 3.x | *Only if HTTPS is enabled.* |
 
