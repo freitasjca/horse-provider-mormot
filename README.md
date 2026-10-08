@@ -4,11 +4,11 @@ mORMot2 transport provider for the [Horse](https://github.com/HashLoad/horse) we
 
 ## Status
 
-> **Working provider, released.** Currently **v1.0.15**. Requests, cookies, multipart,
+> **Working provider, released.** Currently **v1.0.16**. Requests, cookies, multipart,
 > `SendFile`/`Download`, `Req.RawWebRequest`/`Res.RawWebResponse`, TLS/mTLS and graceful
-> shutdown all work; the integration suite runs 128/128 on Delphi / Windows on the default
-> thread-pool backend. The http.sys backend has limits of its own: see
-> [http.sys backend limitations](#httpsys-backend-limitations).
+> shutdown all work; the integration suite runs 131/131 on Delphi / Windows on both socket
+> backends (thread pool and async) with a current mORMot2. The http.sys backend has limits
+> of its own: see [http.sys backend limitations](#httpsys-backend-limitations).
 >
 > The design blueprint is still worth reading before changing the bridges:
 > [`doc/building-a-mormot-provider.md`](https://github.com/freitasjca/horse-provider-mormot/blob/master/doc/building-a-mormot-provider.md).
@@ -98,14 +98,23 @@ Define precedence in `THorseMormotConfig.Default`: `HORSE_MORMOT_HTTPAPI` (Windo
 
 ### Integration results per backend
 
-The same 128-check integration suite (`samples/tests`) on each backend, 2026-10-06,
-Windows / Delphi 12, mORMot2 `fd5b340`:
+The same 131-check integration suite (`samples/tests`) on each backend, 2026-10-08,
+Windows / Delphi 12, provider v1.0.16, mORMot2 2.4.17458 (`7dddd3ec7`):
 
 | Backend | Result | What fails |
 |---|---|---|
-| `mskThreadPool` | **128/128** | — |
-| `mskAsync` | 127/128 | `RemoteAddr` is empty for a **loopback** client: mORMot2's async server always reports 127.0.0.1 as empty, ignoring `RemoteIPLocalHostAsVoidInServers` ([mORMot2#639](https://github.com/synopse/mORMot2/issues/639)). Remote clients are unaffected. |
-| `mskHttpApi` | 120/128 | See below |
+| `mskThreadPool` | **131/131** | — |
+| `mskAsync` | **131/131** | — (before mORMot2 2.4.17421, `RemoteAddr` was empty for a loopback client: [mORMot2#639](https://github.com/synopse/mORMot2/issues/639), now fixed) |
+| `mskHttpApi` | 127/131 | Tests 04 and 15 only: `PUT`/`POST` with an empty body and no `Content-Length` get `411` from http.sys itself. The test client omits the header; send `Content-Length: 0`. See below |
+
+### Request body size limit
+
+`THorseMormotConfig.MaxBodyBytes` (default 4 MB) is handed to mORMot2's own
+`MaximumAllowedContentLength` since v1.0.16, on every backend. An oversized body is
+refused with `413` by mORMot2 from its `Content-Length` header, **before** it is read
+(a chunked one once it passes the limit). Earlier versions buffered the whole body first and
+only then refused it, so an upload cost its full size in memory either way. The
+provider's own check stays behind it as a second line. `MaxBodyBytes := 0` means no limit.
 
 ### Streaming is not supported
 
@@ -121,19 +130,25 @@ gates the refusal.
 ### http.sys backend limitations
 
 These come from mORMot2's http.sys binding (`THttpApiServer`) or from http.sys itself, not
-from this provider; the mORMot2 ones are reported upstream as
-[#637](https://github.com/synopse/mORMot2/issues/637) (chunked bodies) and
-[#638](https://github.com/synopse/mORMot2/issues/638) (`Set-Cookie`). Prefer `mskThreadPool` or `mskAsync` if
-any of them matters to you.
+from this provider. Two were fixed in mORMot2 after being reported
+([#637](https://github.com/synopse/mORMot2/issues/637) chunked bodies,
+[#638](https://github.com/synopse/mORMot2/issues/638) `Set-Cookie`), so **use mORMot2
+2.4.17428 or later** with this backend. Prefer `mskThreadPool` or `mskAsync` if any of the
+rest matters to you.
 
-- **Chunked request bodies are refused with `411 Length Required`** (since v1.0.13). mORMot2
-  reads the request body only when `Content-Length` is present, so a body sent with
-  `Transfer-Encoding: chunked` used to reach your route **empty, with no error** — a
-  multipart upload looked like "no file field". The provider now refuses such a request,
-  naming `Content-Length` in the JSON error, rather than run your route without its body.
-  Clients that stream uploads chunked must send `Content-Length` on this backend.
-- **Only the last `Set-Cookie` header is sent.** http.sys keeps one slot per known response
-  header, and mORMot2 overwrites it, so a route setting two cookies delivers only the second.
+- **Chunked request bodies**, by mORMot2 version:
+  - **2.4.17428 and later:** delivered, as long as `MaxBodyBytes > 0` (the default is 4 MB).
+    With `MaxBodyBytes := 0` mORMot2 refuses **every** chunked body with `413`: its new
+    chunked loop compares against a zero limit (reported on #637).
+  - **Earlier:** mORMot2 read a body only when `Content-Length` was present, so a chunked
+    body reached the route **empty, with no error**. The provider refuses those with
+    `411 Length Required` (since v1.0.13) rather than run the route without its body.
+- **Two `Set-Cookie` headers**: both are sent from mORMot2 2.4.17423. Earlier, http.sys kept
+  one slot per known header and only the last cookie arrived.
+- **An oversized upload stalls its keep-alive connection.** mORMot2 answers the `413` without
+  reading the rest of the body or closing the connection. curl aborts the upload and
+  reconnects, so it is unaffected; a client that finishes sending and reuses the connection
+  waits on its next request until it times out. Other connections are served normally.
 - **`POST`/`PUT` with no body and no `Content-Length` get `411` from http.sys itself**,
   before the request reaches Horse. Send `Content-Length: 0`.
 - **No TLS fields**: `SSLEnabled` raises at `Listen`; bind the certificate with
@@ -148,7 +163,7 @@ Every test server in `tests/` and `samples/tests/` takes the backend from
 |---|---|---|
 | **Delphi** | 10.4 Sydney | `inline var`, `System.Threading` — same baseline as Horse. |
 | **Lazarus / FPC** | **3.2.0** | Unlike the CrossSocket provider (which needs FPC **3.3.1 trunk** for `{$MODESWITCH FUNCTIONREFERENCES}`), mORMot2 has no such requirement. FPC **3.2.2 stable + Lazarus 2.2+** work out of the box. See [Lazarus / FPC IDE setup](#lazarus--fpc-ide-setup) below. |
-| **mORMot2** | latest | Core units: `mormot.core.base`, `mormot.core.unicode`, `mormot.net.http`, `mormot.net.server`. |
+| **mORMot2** | latest; **2.4.17428+ for http.sys** | Core units: `mormot.core.base`, `mormot.core.unicode`, `mormot.net.http`, `mormot.net.server`. Validated on 2.4.17458. TLS 1.3 suites need 2.4.16916+; http.sys chunked bodies 2.4.17428+. mORMot2 is not a Boss dependency, so no floor is enforced. |
 | **Horse** | ≥ 3.3.10 | 3.3.0 first carried the `HORSE_PROVIDER_*` namespace (PATCH-HORSE-2). The floor is **3.3.10 from provider v1.0.10**, because `StopListenGraceful` is silently inert through `THorse` on anything earlier — see [Graceful shutdown](#graceful-shutdown). |
 | **OpenSSL** | 1.1.x or 3.x | *Only if HTTPS is enabled.* |
 
@@ -258,13 +273,13 @@ THorse.StopListenGraceful(5000);   // wait up to 5 s for in-flight work
 Implemented in **provider v1.0.10** (FIX-MORMOT-GRACEFUL-1), completed for http.sys in
 **v1.0.12** (FIX-MORMOT-GRACEFUL-2). Measured: 735-752 ms for 700 ms of remaining work.
 
-Verified on **all three backends** (2026-10-06, Windows / Delphi 12, v1.0.12):
+Verified on **all three backends** (Windows / Delphi 12):
 
 | Backend | Reply delivered |
 |---|---|
-| `mskThreadPool` | 60/60 |
-| `mskAsync` | 60/60 |
-| `mskHttpApi` | 20/20 (0/11 before v1.0.12) |
+| `mskThreadPool` | 60/60 (v1.0.12), 20/20 (v1.0.16) |
+| `mskAsync` | 60/60 (v1.0.12), 20/20 (v1.0.16) |
+| `mskHttpApi` | 60/60 (v1.0.16, mORMot2 2.4.17458); 0/11 before v1.0.12 |
 
 Each test server in `tests/` takes the backend from `HORSE_MORMOT_TEST_BACKEND`
 (`threadpool`, `async` or `httpapi`), so any gate can be repeated per backend without a
@@ -286,9 +301,15 @@ request queue first, which aborts a response still being sent. So on `mskHttpApi
 drain finished on time (~700 ms) and the client then got WinHTTP error 12030 on every run.
 
 v1.0.12 also waits for mORMot's own `CurrentProcess` count, which every backend
-decrements only **after** the send, bounded by the same caller timeout. No delay was
-added. A 100 ms settle on the old code also delivered 20/20, which confirmed the
-cause before the fix was tested.
+decrements only **after** the send, bounded by the same caller timeout. A 100 ms settle on
+the old code also delivered 20/20, which confirmed the cause before the fix was tested.
+
+That was not quite enough. `CurrentProcess` drops when `HttpSendHttpResponse` **returns**,
+and the kernel can still be transmitting then. On mORMot2 2.4.17458 the reply was lost in
+3 of 80 runs, against 0 of 60 with a 100 ms settle. So **v1.0.16 settles 100 ms on
+http.sys by default** (FIX-MORMOT-GRACEFUL-3), and 60/60 since. The socket backends keep 0.
+The A/B is suggestive rather than conclusive (Fisher's p is about 0.18); the delay costs
+100 ms on a graceful stop of this backend only.
 
 ### What was wrong before v1.0.10
 
@@ -299,9 +320,10 @@ handler returned, and the handler then had no server left to answer through. The
 died at the moment the handler *finished*, not when shutdown began. The time was never
 wrong; the order was.
 
-**No settle delay is needed, and that was measured rather than assumed:** an A/B of 60
-runs with a 0 ms settle against 60 with 100 ms came back 60/60 both ways, so the default
-stays at 0. `HORSE_MORMOT_SETTLE_MS` exists for characterisation only.
+**No settle delay is needed on the socket backends, and that was measured rather than
+assumed:** an A/B of 60 runs with a 0 ms settle against 60 with 100 ms came back 60/60 both
+ways, so their default stays at 0 (http.sys is the exception, above).
+`HORSE_MORMOT_SETTLE_MS` overrides the default on every backend.
 
 ### The one unexplained loss (v1.0.10)
 

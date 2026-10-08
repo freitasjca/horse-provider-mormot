@@ -300,6 +300,11 @@ begin
   // whose body really is empty is refused too - it cannot be told apart here.
   // The socket backends de-chunk correctly, so the caller passes True only for
   // mskHttpApi.
+  // mORMot2 2.4.17428+ (7baf2887e, synopse/mORMot2#637) reads chunked bodies on
+  // http.sys too. Such a body then arrives NON-empty and passes this check
+  // untouched, so no version test is needed: the refusal now fires only on an
+  // older mORMot2. (17428 also needs a positive MaximumAllowedContentLength -
+  // see MORMOT-MAXBODY-1 in Horse.Provider.Mormot.pas.)
   if ARefuseChunkedBody and HasTE and (LTeValue = 'chunked')
      and (Length(ACtxt.InContent) = 0) then
   begin
