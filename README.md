@@ -139,7 +139,8 @@ rest matters to you.
 - **Chunked request bodies**, by mORMot2 version:
   - **2.4.17428 and later:** delivered, as long as `MaxBodyBytes > 0` (the default is 4 MB).
     With `MaxBodyBytes := 0` mORMot2 refuses **every** chunked body with `413`: its new
-    chunked loop compares against a zero limit (reported on #637).
+    chunked loop compares against a zero limit
+    ([mORMot2#642](https://github.com/synopse/mORMot2/issues/642)).
   - **Earlier:** mORMot2 read a body only when `Content-Length` was present, so a chunked
     body reached the route **empty, with no error**. The provider refuses those with
     `411 Length Required` (since v1.0.13) rather than run the route without its body.
@@ -148,7 +149,8 @@ rest matters to you.
 - **An oversized upload stalls its keep-alive connection.** mORMot2 answers the `413` without
   reading the rest of the body or closing the connection. curl aborts the upload and
   reconnects, so it is unaffected; a client that finishes sending and reuses the connection
-  waits on its next request until it times out. Other connections are served normally.
+  waits on its next request until it times out. Other connections are served normally
+  ([mORMot2#643](https://github.com/synopse/mORMot2/issues/643)).
 - **`POST`/`PUT` with no body and no `Content-Length` get `411` from http.sys itself**,
   before the request reaches Horse. Send `Content-Length: 0`.
 - **No TLS fields**: `SSLEnabled` raises at `Listen`; bind the certificate with
