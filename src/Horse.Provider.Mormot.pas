@@ -283,7 +283,21 @@ var
   // thread, so the reorder alone may be sufficient, and shipping a delay
   // "just in case" would hide whether it is needed. Override with
   // HORSE_MORMOT_SETTLE_MS to characterise the gap without a rebuild.
+  // -1 = environment not read yet, -2 = read and not set (use the backend
+  // default), >= 0 = the HORSE_MORMOT_SETTLE_MS value, which wins everywhere.
   GGracefulSettleMs: Integer = -1;
+
+const
+  // [FIX-MORMOT-GRACEFUL-3] http.sys default settle. GRACEFUL-2's CurrentProcess
+  // wait ends when HttpSendHttpResponse RETURNS, and the kernel can still be
+  // transmitting then: closing the request queue at that moment cost the reply
+  // in 3 of 80 drain runs (WinHTTP 12030 at ~1510 ms, drain on time) against
+  // 0 of 60 with a 100 ms settle (mORMot2 2.4.17458, 2026-10-07). Fisher's p is
+  // ~0.18 - suggestive, not proof - but the cost is 100 ms on a graceful stop of
+  // the http.sys backend only, and v1.0.12's control (settle 100 on the old
+  // binary, 20/20) points the same way. The socket backends keep 0: their
+  // destructors join the workers before closing anything (60/60 async).
+  HTTPSYS_DEFAULT_SETTLE_MS = 100;
 
 // [FIX-MORMOT-GRACEFUL-2] Monotonic milliseconds, for bounding the send wait by
 // the caller's timeout. FPC: SysUtils.GetTickCount64. Delphi: TStopwatch, since
@@ -298,18 +312,23 @@ begin
   {$ENDIF}
 end;
 
-function GracefulSettleMs: Integer;
+function GracefulSettleMs(const ABackendDefault: Integer): Integer;
 var
   LRaw: string;
+  LVal: Integer;
 begin
-  if GGracefulSettleMs < 0 then
+  if GGracefulSettleMs = -1 then
   begin
     LRaw := GetEnvironmentVariable('HORSE_MORMOT_SETTLE_MS');
-    if (LRaw = '') or not TryStrToInt(Trim(LRaw), GGracefulSettleMs)
-       or (GGracefulSettleMs < 0) then
-      GGracefulSettleMs := 0;
+    if (LRaw <> '') and TryStrToInt(Trim(LRaw), LVal) and (LVal >= 0) then
+      GGracefulSettleMs := LVal
+    else
+      GGracefulSettleMs := -2;
   end;
-  Result := GGracefulSettleMs;
+  if GGracefulSettleMs >= 0 then
+    Result := GGracefulSettleMs
+  else
+    Result := ABackendDefault;
 end;
 
 
@@ -560,6 +579,22 @@ begin
 
   FServer.OnRequest := LHandler.Process;
 
+  // [MORMOT-MAXBODY-1] Hand MaxBodyBytes to mORMot2 itself. SEC-16 in Validate
+  // only runs after mORMot2 has buffered the WHOLE body, so an oversized upload
+  // cost its full size in memory before being refused. With the limit set,
+  // mORMot2 answers 413 from the Content-Length header before reading the
+  // body, and stops a chunked one as soon as it passes the limit.
+  // Required on http.sys from mORMot2 2.4.17428 (7baf2887e, the fix for
+  // synopse/mORMot2#637): its new chunked-body loop tests
+  // "incontlenread > fMaximumAllowedContentLength" without the "> 0" guard the
+  // Content-Length path has, so at the default 0 ("any size") EVERY chunked
+  // body is refused with 413. A positive limit avoids it. MaxBodyBytes = 0
+  // (unlimited) leaves the mORMot2 default, and chunked uploads on http.sys
+  // then get that 413 until mORMot2 fixes the guard. Validate keeps SEC-16 as
+  // a second line.
+  if AConfig.MaxBodyBytes > 0 then
+    FServer.MaximumAllowedContentLength := AConfig.MaxBodyBytes;
+
   // ── TLS [SEC-TLS-1] ─────────────────────────────────────────────────────────
   // Build a mORMot TNetTlsContext from the SSL* config fields and hand it to the
   // socket server's WaitStarted overload, which loads the cert/key into the
@@ -709,7 +744,13 @@ begin
     //    this ships at 0 so the Shutdown-then-drain reorder is tested ALONE, and
     //    HORSE_MORMOT_SETTLE_MS can add a window without a rebuild if the reply
     //    still does not arrive. One variable at a time.
-    LSettle := GracefulSettleMs;
+    //    [FIX-MORMOT-GRACEFUL-3] It did matter on http.sys: 100 ms there by
+    //    default (HTTPSYS_DEFAULT_SETTLE_MS above), still 0 on the socket
+    //    backends. HORSE_MORMOT_SETTLE_MS overrides both.
+    if FConfig.ServerKind = mskHttpApi then
+      LSettle := GracefulSettleMs(HTTPSYS_DEFAULT_SETTLE_MS)
+    else
+      LSettle := GracefulSettleMs(0);
     if LSettle > 0 then
       Sleep(LSettle);
 

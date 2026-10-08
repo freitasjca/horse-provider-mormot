@@ -60,6 +60,9 @@ program HorseMormotTestClient;
     47  GET    /stream/sendstream            → Res.SendStream parts delivered, OR a
                                                non-2xx refusal - never 2xx with the
                                                parts lost (SENDSTREAM-PROBE)
+    48  POST   /echo/body  MaxBodyBytes + 1   → refused, by mORMot2 itself (an
+                                               HTML 413, or the connection closed),
+                                               server still healthy (MORMOT-MAXBODY-1)
 *)
 
 uses
@@ -82,6 +85,9 @@ const
   BURST_COUNT         = 8;
   RAPID_SEQ_COUNT     = 5;
   CHUNKED_BODY_MARKER = 'CHUNKED_BODY_MARKER_7F3A';   // test 46
+  // Test 48: one byte over the server's MaxBodyBytes. The test server uses
+  // THorseMormotConfig.Default, so this mirrors MORMOT_DEFAULT_MAX_BODY_BYTES.
+  OVERSIZE_BODY_SIZE  = 4 * 1024 * 1024 + 1;
 
 var
   GPassCount:        Integer = 0;
@@ -505,6 +511,9 @@ var
   LForm:          THttpMultiPartFormData;
   LFileStream:    TMemoryStream;
   LChunkStream:   TChunkProbeStream;   // test 46
+  LOversizeClient: TCrossHttpClient;   // test 48
+  LClosedByServer: Boolean;            // test 48
+  LStatusText:    string;              // test 48
   LFileBytes:     TBytes;
   LLargeBody:     TBytes;
   LSessionCookie: string;
@@ -1259,6 +1268,58 @@ begin
       R.StatusCode >= 400, Format('%d / [%s]', [R.StatusCode, R.Body]));
   DoSync(AClient, 'GET', BASE_URL + '/ping', nil, nil, R);
   Check('server healthy after the SendStream probe',
+    (R.StatusCode = 200) and (R.Body = 'pong'),
+    Format('%d / %s', [R.StatusCode, R.Body]));
+
+  // ── 48  A body over MaxBodyBytes is refused BEFORE it is buffered ──────────
+  // [MORMOT-MAXBODY-1] The provider hands MaxBodyBytes to mORMot2's
+  // MaximumAllowedContentLength, so mORMot2 refuses from the Content-Length
+  // header. Before that, the body was buffered in full and the provider's own
+  // SEC-16 check answered 413 with a JSON body afterwards. The two refusals are
+  // told apart by their bodies: mORMot2 sends an HTML page (http.sys: "Server
+  // Error 413", socket servers: "Server rejected this request as 413"), the
+  // provider sends {"error":...}. mORMot2 may also close the connection
+  // while the client is still sending (status 0, no timeout) - that is a
+  // refusal too. A 2xx is the defect. Three checks on every backend.
+  //
+  // The oversized POST goes through its OWN client, freed afterwards. mORMot2's
+  // early 413 on http.sys neither reads the rest of the body nor closes the
+  // connection, and TCrossHttpClient reuses that connection, so the next request
+  // on it waits behind the unread body (8 s timeout, measured 2026-10-07). curl
+  // aborts the upload and reconnects, and a fresh connection is served at once:
+  // the server is fine, the connection is not. Check 3 asks whether the SERVER
+  // is healthy, so it must not ride on the poisoned connection.
+  //
+  // The socket backends answer 413 and CLOSE while the client is still
+  // uploading. TCrossHttpClient then reports its OWN status 400 with an empty
+  // body and StatusText 'Send failed...' or 'Connection lost'
+  // (Net.CrossHttpClient.pas TriggerResponseFailed) - not a server response.
+  // Which of the two the client sees is a race (a warm connection read the 413
+  // first; a fresh one hit the close, 2026-10-08), so both count as refused.
+  Section(Format('48  POST /echo/body  (%d bytes = MaxBodyBytes + 1)', [OVERSIZE_BODY_SIZE]));
+  LLargeBody := TEncoding.UTF8.GetBytes(StringOfChar('B', OVERSIZE_BODY_SIZE));
+  LOversizeClient := TCrossHttpClient.Create(1 {IoThreads});
+  try
+    DoSync(LOversizeClient, 'POST', BASE_URL + '/echo/body', nil, LLargeBody, R);
+    LStatusText := '';
+    if R.Response <> nil then
+      LStatusText := R.Response.StatusText;
+    LClosedByServer := (not R.TimedOut) and
+      ((R.StatusCode = 0) or
+       ((R.StatusCode = 400) and (R.Body = '') and
+        ((Pos('Send failed', LStatusText) = 1) or (Pos('Connection lost', LStatusText) = 1))));
+  finally
+    LOversizeClient.Free;
+  end;
+  Check('oversized body refused (413, or connection closed) - not accepted',
+    (R.StatusCode = 413) or LClosedByServer,
+    Format('%d %s / timedout=%s / %s',
+      [R.StatusCode, LStatusText, BoolToStr(R.TimedOut, True), Copy(R.Body, 1, 120)]));
+  Check('refused by mORMot2 before buffering, not by the provider afterwards',
+    LClosedByServer or ((R.StatusCode = 413) and (Pos('<html', LowerCase(R.Body)) > 0)),
+    Format('%d %s / %s', [R.StatusCode, LStatusText, Copy(R.Body, 1, 120)]));
+  DoSync(AClient, 'GET', BASE_URL + '/ping', nil, nil, R);
+  Check('server healthy after the oversized body (on another connection)',
     (R.StatusCode = 200) and (R.Body = 'pong'),
     Format('%d / %s', [R.StatusCode, R.Body]));
 
