@@ -1,4 +1,4 @@
-﻿unit MyHorseMormotService;
+unit MyHorseMormotService;
 
 interface
 
