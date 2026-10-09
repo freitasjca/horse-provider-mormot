@@ -1,8 +1,10 @@
 # Integration Test Matrix — `horse-provider-mormot` samples/tests
 
-This tree exercises every supported Provider × Application-type combination using a single shared test client and a per-shape server. The shared client (`HorseCSTestClient.dpr` from `horse-provider-crosssocket/samples/tests/`) is *transport-neutral* — it sends HTTP to `127.0.0.1:9010` and asserts response bodies / headers / status codes. Any of the server projects in this tree can be the target: each registers the same 32 routes via the shared `Horse.Mormot.TestRoutes` unit.
+This tree exercises every supported Provider × Application-type combination using a single test client and a per-shape server. The client (`HorseMormotTestClient.dpr`, in this folder) is *transport-neutral* — it sends HTTP to `127.0.0.1:9010` and asserts response bodies / headers / status codes. Any of the server projects in this tree can be the target: each registers the same routes via the shared `Horse.Mormot.TestRoutes` unit.
 
-Expected result for every server: **88 passed, 1 failed** (89 sub-assertions). The single failure is the documented multi-value `Set-Cookie` limitation — `FCustomHeaders` is a `TDictionary<string,string>` on Delphi / `TStringList` on FPC, so two `Res.AddHeader('Set-Cookie', …)` calls keep only the last. This is the same result as the CrossSocket provider.
+**Current baseline: 131 passed, 0 failed on all three backends** (thread pool, async, http.sys) — `HorseMormotTestServer` (Delphi, Console shape) built by `build-tests-dcc.bat`, 2026-10-08, mORMot2 2.4.17458, Horse 3.3.12. http.sys reaches 131 only with a test client built against Delphi-Cross-Socket 1.0.16 or later, which sends `Content-Length: 0` on an empty PUT/POST; with older DCS, http.sys answers tests 04 and 15 with its own 411.
+
+> **Which shapes that baseline covers.** Only the legacy Console server (row 1) is run. No run of rows 2–7 is recorded. Until 2026-09-04 (commit `6ad5c03`) the WinService sample was wired to the *CrossSocket* service class, so it never exercised this provider before then. Treat every other shape as built-from-source-only until someone records a date, toolchain and count here.
 
 ---
 
@@ -11,6 +13,8 @@ Expected result for every server: **88 passed, 1 failed** (89 sub-assertions). T
 ```
 samples/tests/
 ├── README.md                                     ← this file
+├── HorseMormotTestClient.dpr                     ← the client; targets 127.0.0.1:9010
+├── build-tests-dcc.bat                           ← builds server + client with dcc64
 ├── HorseMormotTestServer.dpr                     ← legacy baseline (Console, direct provider use).
 │                                                    Kept for backwards compatibility; same routes
 │                                                    as Delphi/Console/ below.
@@ -48,7 +52,7 @@ samples/tests/
 | 6 | `Lazarus/Console/HorseMormotTestServer` | FPC | Console | `Horse.Provider.Mormot` | `fpSignal` | `-dHORSE_PROVIDER_MORMOT` *(future)* |
 | 7 | `Lazarus/Daemon/HorseMormotDaemonTestServer` | FPC | Daemon | `Horse.Provider.Mormot.Daemon` | `THorseMormotLinuxDaemonApp.Run` | `-dHORSE_PROVIDER_MORMOT` *(future)* |
 
-> **Note on defines.** `HORSE_PROVIDER_MORMOT` is reserved in Horse.pas but not yet routed (unlike `HORSE_PROVIDER_CROSSSOCKET` which is fully wired). Until Horse.pas is patched, include `Horse.Provider.Mormot` (and the shape-specific variant) **directly** in the project's `uses` clause — no define is needed. The define column above shows the intended future state.
+> **Note on defines.** `HORSE_PROVIDER_MORMOT` is fully routed in `Horse.pas` since Horse 3.3.0 (this provider needs 3.3.12 or later): with it, `+ HORSE_APPTYPE_VCL` selects `Horse.Provider.Mormot.VCL`, `+ HORSE_APPTYPE_DAEMON` selects `Horse.Provider.Mormot.Daemon` (Delphi) or `.FPC.Daemon` (FPC), and on FPC `+ HORSE_APPTYPE_LCL` selects `.FPC.LCL`, with `.FPC.HTTPApplication` as the FPC default. The test servers here still name the provider unit **directly** in their `uses` clause, which also works with no define. The *(future)* marks in the table are historical.
 
 > **Rows 4 and 5 share the same defines** for the same reason as CrossSocket: `HORSE_APPTYPE_DAEMON` means "OS-supervised long-running process". `Horse.Provider.Mormot.Daemon.pas` ships both paths in one unit (`{$IFDEF MSWINDOWS}` → `THorseMormotService`; `{$ELSE}` → `THorseMormotLinuxDaemonApp`). The build target, not an extra define, selects the incarnation.
 
@@ -107,16 +111,16 @@ samples/tests/
 
 ## Running the shared client
 
-The client (`HorseCSTestClient.dpr` in `horse-provider-crosssocket/samples/tests/`) is transport-neutral. Start any of the server shapes above and then:
+The client (`HorseMormotTestClient.dpr`, in this folder) is transport-neutral. Start any of the server shapes above and then:
 
 ```
-> HorseCSTestClient.exe
-[HorseCSTest] Client - target: http://127.0.0.1:9010
+> HorseMormotTestClient.exe
+[HorseMormotTest] Ensure a mORMot2 Horse server is running on port 9010.
 ...
-[HorseCSTest] 88 passed, 1 failed  (total 89)
+[HorseMormotTest] 131 passed, 0 failed  (total 131) in … ms wall clock
 ```
 
-The single failure is always Test 10 (multi-value `Set-Cookie`) — a Horse core limitation, not a transport or shape bug.
+The exit code is the number of failed checks.
 
 ---
 
@@ -143,8 +147,10 @@ To run the suite against the async backend, pick either:
   ```
   (add `Horse.Provider.Mormot.Config` to `uses`), rebuild and re-run.
 
-**Expected result is identical: `88 passed, 1 failed` (Test 10).** Any other
-delta between the two backends is a real bug in the async path, not the suite.
+**Expected result is identical: 131 passed, 0 failed.** Any delta between the
+backends is a real bug in that backend's path, not the suite. The legacy
+`HorseMormotTestServer` (row 1) also honours `HORSE_MORMOT_TEST_BACKEND` (`threadpool` | `async` | `httpapi`) at
+run time, which needs no rebuild.
 
 > Tip: the bench server (`horse-provider-crosssocket/samples/bench/Servers/Mormot/`)
 > already exposes a `--async` switch for the same A/B under load.
@@ -179,7 +185,7 @@ sudo cp horsemormot-test-daemon.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl start  horsemormot-test-daemon
 sudo systemctl status horsemormot-test-daemon
-# … run HorseCSTestClient from any host that can reach :9010
+# … run HorseMormotTestClient from any host that can reach :9010
 sudo systemctl stop   horsemormot-test-daemon    # SIGTERM → SEC-30 drain → exit 0
 ```
 
@@ -200,7 +206,7 @@ REM Verify
 sc query HorseMormotTestService
 
 REM Run the client (any host that can reach :9010)
-HorseCSTestClient.exe
+HorseMormotTestClient.exe
 
 REM Stop — drains via SEC-30 active-request counter
 sc stop HorseMormotTestService
@@ -216,7 +222,7 @@ HorseMormotServiceTestServer.exe /uninstall
 The point of testing every cross-product combination is to confirm that **transport behaviour is identical** regardless of which Application-type shape wraps it. By keeping:
 
 - **One** route surface (`Common/Horse.Mormot.TestRoutes.pas`)
-- **One** client test runner (`HorseCSTestClient.dpr`, shared with CrossSocket)
+- **One** client test runner (`HorseMormotTestClient.dpr`)
 - **N** per-shape servers — each ~30–50 lines of pure lifecycle wiring
 
-…any divergence in test results between shapes points immediately at a shape-specific bug (in the provider unit), not at a route-surface bug. The `88 passed, 1 failed` baseline is the contract every shape must satisfy.
+…any divergence in test results between shapes points immediately at a shape-specific bug (in the provider unit), not at a route-surface bug. The Console baseline (131 passed, 0 failed) is the contract every shape must satisfy.
