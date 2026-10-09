@@ -71,6 +71,7 @@ uses
   System.SysUtils,
   System.StrUtils,                 // IfThen (string)
   {$IFDEF MSWINDOWS}
+  Winapi.Windows,                  // GetModuleHandle / GetModuleFileName
   mormot.lib.openssl11,            // must be USED as well as FORCE_OPENSSL defined
   {$ENDIF}
   Horse,
@@ -81,6 +82,30 @@ uses
 
 const
   TLS_PORT = 9201;
+
+{$IFDEF MSWINDOWS}
+// [TLS-OSSLVER-1] Which libcrypto file did this process load? The version
+// text alone does not say whether it came from beside the binary or from
+// PATH. mORMot keeps the loaded path private, so ask Windows for the module
+// by the names mORMot tries. Never raises: '?' just means not found.
+function LoadedLibCryptoPath: string;
+const
+  NAMES: array[0..3] of string = ('libcrypto-3-x64.dll', 'libcrypto-1_1-x64.dll',
+    'libcrypto-3.dll', 'libcrypto-1_1.dll');
+var
+  LMod: HMODULE;
+  LBuf: array[0..MAX_PATH] of Char;
+  I:    Integer;
+begin
+  Result := '?';
+  for I := Low(NAMES) to High(NAMES) do
+  begin
+    LMod := GetModuleHandle(PChar(NAMES[I]));
+    if (LMod <> 0) and (GetModuleFileName(LMod, LBuf, Length(LBuf)) > 0) then
+      Exit(LBuf);
+  end;
+end;
+{$ENDIF}
 
 function FindCertDir: string;
 const
@@ -177,8 +202,8 @@ begin
         + 'handshake would fail while this process still looked healthy. Put '
         + 'libcrypto-3-x64.dll and libssl-3-x64.dll beside the binary '
         + '(build-tls-dcc.bat copies them).');
-    Writeln(Format('[MormotTLSTest] TLS backend: OpenSSL %s',
-      [string(OpenSslVersionText)]));
+    Writeln(Format('[MormotTLSTest] TLS backend: OpenSSL %s from %s',
+      [string(OpenSslVersionText), LoadedLibCryptoPath]));
     {$ENDIF}
 
     Writeln(Format('[MormotTLSTest] Listening on https://127.0.0.1:%d', [TLS_PORT]));

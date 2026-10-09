@@ -99,13 +99,14 @@ Define precedence in `THorseMormotConfig.Default`: `HORSE_MORMOT_HTTPAPI` (Windo
 ### Integration results per backend
 
 The same 131-check integration suite (`samples/tests`) on each backend, 2026-10-08,
-Windows / Delphi 12, provider v1.0.16, mORMot2 2.4.17458 (`7dddd3ec7`):
+Windows / Delphi 12, provider v1.0.16 + the W1057 cleanup, mORMot2 2.4.17465, test client
+built against Delphi-Cross-Socket 1.0.16:
 
 | Backend | Result | What fails |
 |---|---|---|
 | `mskThreadPool` | **131/131** | — |
 | `mskAsync` | **131/131** | — (before mORMot2 2.4.17421, `RemoteAddr` was empty for a loopback client: [mORMot2#639](https://github.com/synopse/mORMot2/issues/639), now fixed) |
-| `mskHttpApi` | 127/131 | Tests 04 and 15 only: `PUT`/`POST` with an empty body and no `Content-Length` get `411` from http.sys itself. The test client omits the header; send `Content-Length: 0`. See below |
+| `mskHttpApi` | **131/131** | — (with a test client built against Delphi-Cross-Socket 1.0.15 or older it is 127/131: tests 04 and 15 send an empty `PUT`/`POST` without `Content-Length`, and http.sys answers `411` itself. DCS 1.0.16 sends `Content-Length: 0`, [winddriver#208](https://github.com/winddriver/Delphi-Cross-Socket/pull/208). Any client of yours that omits the header still gets that `411`: see below) |
 
 ### Request body size limit
 

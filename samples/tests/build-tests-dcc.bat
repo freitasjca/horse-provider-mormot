@@ -88,8 +88,10 @@ echo    bin\HorseMormotTestServer      terminal 1  (listens on 127.0.0.1:9010)
 echo    bin\HorseMormotTestClient      terminal 2
 echo.
 echo  Client exit code = number of failed checks; 0 means all passed.
-echo  Green baseline: 131/131 thread pool + async, 127/131 http.sys (tests 04/15:
-echo  the client omits Content-Length on empty bodies). 128 before test 48.
+echo  Green baseline: 131/131 on all three backends. http.sys is 127/131 when
+echo  the client is built against Delphi-Cross-Socket 1.0.15 or older: it omits
+echo  Content-Length on empty PUT/POST bodies and http.sys answers 411 itself
+echo  ^(tests 04/15^). 128 before test 48.
 echo.
 echo  PORT 9010 IS SHARED with the CrossSocket and ICS suites, so only
 echo  one server may run at a time. Windows lets a second process bind the same

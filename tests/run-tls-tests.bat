@@ -145,6 +145,16 @@ goto :wait_loop
 :bound
 echo    server pid !SRVPID! listening on port %TLS_PORT%
 
+REM -- [TLS-OSSLVER-1] Record which OpenSSL runtime served this pass. The
+REM    server prints it before binding; a passing run never shows the log,
+REM    so echo it here. "OpenSSL 3.x" is not one version - the exe takes the
+REM    first libcrypto it finds - and a result is only comparable with the
+REM    version beside it. Informational: a missing line does not fail the pass.
+set "OSSL="
+for /f "delims=" %%L in ('findstr /L /C:"TLS backend:" "!LOG!" 2^>nul') do set "OSSL=%%L"
+if "!OSSL!"=="" set "OSSL=OpenSSL: not reported by the server - binary predates TLS-OSSLVER-1?"
+echo    !OSSL!
+
 REM -- Refuse to test a transport that is not actually TLS. The server prints
 REM    its live backend before binding; no OpenSSL line means it either fell
 REM    back or never got that far, and every assertion below would be noise.
