@@ -200,6 +200,21 @@ uses
   {$IFEND}
 {$IFEND}
 
+// [MORMOT-W1057-1] mormot.core.base exports Trim(RawUtf8), and because it is
+// in scope after SysUtils it hides SysUtils.Trim: a plain Trim(string) went
+// string -> UTF8String -> string, two conversions per call and two W1057
+// warnings per line on Delphi. The result was correct (ASCII input), but the
+// noise buried new warnings. Qualify the RTL Trim instead of relying on the
+// uses order.
+function SysTrim(const S: string): string;
+begin
+  {$IF DEFINED(FPC)}
+  Result := SysUtils.Trim(S);
+  {$ELSE}
+  Result := System.SysUtils.Trim(S);
+  {$ENDIF}
+end;
+
 // [MORMOT-SENDSTREAM-REFUSE-1] Res.SendStream must fail LOUDLY on this provider.
 // It has no streaming engine and registers no stream writer, so Horse used its
 // default THorseWebBrokerStreamWriter, which cannot reach the socket through the
@@ -250,12 +265,12 @@ begin
     LPos := Pos(':', LRest);
     if LPos > 0 then
     begin
-      LName := Trim(Copy(LRest, 1, LPos - 1));
+      LName := SysTrim(Copy(LRest, 1, LPos - 1));
       LRest := Copy(LRest, LPos + 1, MaxInt);
     end
     else
     begin
-      LName := Trim(LRest);
+      LName := SysTrim(LRest);
       LRest := '';
     end;
     if LName = '' then
@@ -320,7 +335,7 @@ begin
   if GGracefulSettleMs = -1 then
   begin
     LRaw := GetEnvironmentVariable('HORSE_MORMOT_SETTLE_MS');
-    if (LRaw <> '') and TryStrToInt(Trim(LRaw), LVal) and (LVal >= 0) then
+    if (LRaw <> '') and TryStrToInt(SysTrim(LRaw), LVal) and (LVal >= 0) then
       GGracefulSettleMs := LVal
     else
       GGracefulSettleMs := -2;
