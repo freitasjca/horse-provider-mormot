@@ -20,9 +20,21 @@ program HorseMormotVCLTestServer;
   Run sequence:
     1. Start this VCL app — the form shows; mORMot's thread pool runs in
        the background while the VCL message loop keeps the form responsive.
-    2. Run HorseCSTestClient.exe (from horse-provider-crosssocket/samples/tests/).
+    2. Run HorseMormotTestClient.exe (samples/tests/, built by build-tests-dcc.bat).
+       Confirm the transport first: curl -sI http://127.0.0.1:9010/ping must
+       show Server: unknown and X-Frame-Options: DENY (the provider's banner
+       and security headers; Indy sends neither).
     3. Close the form to drain and stop the server.
 *)
+
+// SAMPLE-DEFINE-1 (2026-10-09): every server in this tree starts through
+// THorse.Listen, and THorse is whatever provider Horse.pas selects. Without
+// HORSE_PROVIDER_MORMOT that is Horse's default (Indy on Delphi): the mORMot
+// units still compile, but the sample serves on Indy and a green client run
+// proves nothing about this provider. Fail the build instead.
+{$IF NOT DEFINED(HORSE_PROVIDER_MORMOT)}
+  {$MESSAGE FATAL 'Define HORSE_PROVIDER_MORMOT in Project Options, Conditional defines, All configurations, then Build. Without it this sample serves on Indy, not mORMot.'}
+{$IFEND}
 
 uses
   Vcl.Forms,

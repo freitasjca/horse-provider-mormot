@@ -1,4 +1,4 @@
-inherited frmHorseMormotTestVCL: TfrmHorseMormotTestVCL
+object frmHorseMormotTestVCL: TfrmHorseMormotTestVCL
   Left = 0
   Top = 0
   Caption = 'Horse mORMot2 VCL Test Server'

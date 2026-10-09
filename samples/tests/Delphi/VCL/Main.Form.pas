@@ -32,7 +32,7 @@ implementation
 constructor TfrmHorseMormotTestVCL.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
-  Port := TEST_PORT;             // 9010 — matches HorseCSTestClient
+  Port := TEST_PORT;             // 9010 — matches HorseMormotTestClient
   OnHorseListen := OnRegisterRoutes;
   Caption := Format('Horse mORMot2 VCL Test Server — port %d', [TEST_PORT]);
 end;
@@ -42,7 +42,7 @@ begin
   RegisterTestRoutes;
   if Assigned(lblStatus) then
     lblStatus.Caption := Format('Listening on http://127.0.0.1:%d  ·  '
-      + 'run HorseCSTestClient to exercise. Close this form to stop.',
+      + 'run HorseMormotTestClient to exercise. Close this form to stop.',
       [Port]);
 end;
 
