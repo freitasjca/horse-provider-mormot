@@ -27,11 +27,10 @@ type
     procedure MyStop (Sender: TService; var Stopped: Boolean);
   public
     constructor Create(AOwner: TComponent); override;
-    // Mandatory for every TService descendant: TService.GetServiceController
-    // is abstract, and TService.Main calls it on the SCM's thread before
-    // OnStart. Without it the service dies at start with EAbstractError =
-    // 0x0EEDFADE = SCM 1067, and no handler here ever sees it (SVC-CTRL-1).
-    function GetServiceController: TServiceController; override;
+    // No GetServiceController override here ON PURPOSE: since SVC-CTRL-2 the
+    // base THorseMormotService implements it, and this sample is the gate for
+    // that. Before it, a descendant without the override died at every start
+    // (EAbstractError on the SCM thread = 0x0EEDFADE = SCM 1067, SVC-CTRL-1).
   end;
 
 var
@@ -78,16 +77,6 @@ begin
 end;
 
 { THorseMormotTestService }
-
-procedure ServiceController(CtrlCode: DWord); stdcall;
-begin
-  HorseMormotTestService.Controller(CtrlCode);
-end;
-
-function THorseMormotTestService.GetServiceController: TServiceController;
-begin
-  Result := ServiceController;
-end;
 
 constructor THorseMormotTestService.Create(AOwner: TComponent);
 begin

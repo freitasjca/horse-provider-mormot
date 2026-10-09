@@ -13,6 +13,8 @@ unit Horse.Provider.Mormot.Daemon;
                          ServiceStart → THorse.Listen on a worker thread,
                          ServiceStop  → THorse.StopListen + drain.
                          Use:  type TMyService = class(THorseMormotService);
+                         Implements GetServiceController (SVC-CTRL-2), so a
+                         descendant needs no override of its own.
 
     {$ELSE}              THorseMormotLinuxDaemonApp
                          Static helper class.  Run() installs POSIX signal
@@ -48,7 +50,15 @@ type
 
       type TMyHorseService = class(THorseMormotService)
         procedure ServiceCreate(Sender: TObject);  // register routes here
-      end; }
+      end;
+
+    SVC-CTRL-2: TService.GetServiceController is abstract and TService.Main
+    calls it on the SCM's thread before OnStart, so a descendant that forgot
+    the override died at every start (EAbstractError, SCM error 1067) with
+    nothing logged. This class implements it, forwarding to the instance
+    created last. One service per process - the same limit THorse has, as it
+    hosts one listener per process. A descendant that still declares its own
+    override keeps working. }
   THorseMormotService = class(TService)
   private
     FPort:           Integer;
@@ -59,6 +69,7 @@ type
   public
     constructor Create(AOwner: TComponent); override;
     destructor  Destroy; override;
+    function GetServiceController: TServiceController; override;
     property Port: Integer read FPort write FPort default 9000;
   end;
 {$ENDIF MSWINDOWS}
@@ -86,9 +97,24 @@ type
 implementation
 
 uses
+{$IFDEF MSWINDOWS}
+  Winapi.Windows,
+{$ENDIF}
   Horse;
 
 {$IFDEF MSWINDOWS}
+
+var
+  // SVC-CTRL-2: the service this process hosts. Written on the main thread
+  // (Application.CreateForm, before StartServiceCtrlDispatcher), read on the
+  // SCM's control thread afterwards.
+  GActiveService: THorseMormotService;
+
+procedure HorseMormotServiceController(CtrlCode: DWORD); stdcall;
+begin
+  if GActiveService <> nil then
+    GActiveService.Controller(CtrlCode);
+end;
 
 { THorseMormotService }
 
@@ -98,10 +124,13 @@ begin
   FPort   := 9000;
   OnStart := DoServiceStart;
   OnStop  := DoServiceStop;
+  GActiveService := Self;
 end;
 
 destructor THorseMormotService.Destroy;
 begin
+  if GActiveService = Self then
+    GActiveService := nil;
   if Assigned(FListenerThread) then
   begin
     THorse.StopListen;
@@ -109,6 +138,11 @@ begin
     FreeAndNil(FListenerThread);
   end;
   inherited;
+end;
+
+function THorseMormotService.GetServiceController: TServiceController;
+begin
+  Result := HorseMormotServiceController;
 end;
 
 procedure THorseMormotService.DoServiceStart(Sender: TService;

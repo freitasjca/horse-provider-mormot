@@ -4,7 +4,7 @@ mORMot2 transport provider for the [Horse](https://github.com/HashLoad/horse) we
 
 ## Status
 
-> **Working provider, released.** Currently **v1.0.16**. Requests, cookies, multipart,
+> **Working provider, released.** Currently **v1.0.17**. Requests, cookies, multipart,
 > `SendFile`/`Download`, `Req.RawWebRequest`/`Res.RawWebResponse`, TLS/mTLS and graceful
 > shutdown all work; the integration suite runs 131/131 on Delphi / Windows on both socket
 > backends (thread pool and async) with a current mORMot2. The http.sys backend has limits
@@ -349,6 +349,31 @@ from the output of the run that failed.
 > with no error. Fixed upstream in
 > [HashLoad/horse#590](https://github.com/HashLoad/horse/pull/590), released in 3.3.10.
 
+### VCL form and Windows service
+
+Both shapes start through `THorse.Listen`, so **`HORSE_PROVIDER_MORMOT` must be a
+project-level define** (Project ▸ Options ▸ Conditional defines, all configurations, then
+**Build**). Naming `Horse.Provider.Mormot.VCL` or `.Daemon` in `uses` is not enough:
+without the define `THorse` is Horse's default provider and the app serves on Indy.
+To confirm the transport, `curl -sI` a route: this provider answers with
+`Server: unknown` and `X-Frame-Options: DENY`, Indy with neither.
+
+- **VCL** — descend your main form from `TfrmHorseMormotVCLHost`
+  (`Horse.Provider.Mormot.VCL`); it listens on `FormCreate` and stops on `FormClose`.
+  The base form has no `.dfm`, so your form's `.dfm` must start with `object`, not
+  `inherited` (otherwise the IDE reports *Ancestor for 'TfrmHorseMormotVCLHost' not
+  found*).
+- **Windows service** — descend your service from `THorseMormotService`
+  (`Horse.Provider.Mormot.Daemon`) and register routes in its `OnCreate`. Since v1.0.17
+  the base class implements `GetServiceController` (SVC-CTRL-2). Before that, a
+  service that did not declare the override itself died at every `sc start` with SCM
+  error 1067, and nothing was logged. One service per process.
+
+Measured 2026-10-09 (Windows / Delphi 12, Win64, thread pool, the `samples/tests`
+VCL and WinService servers): **131/131 each**. The service ran under the SCM, and
+`sc stop` drained and released the port. The Linux daemon, Lazarus LCL and FPC
+HTTPApplication shapes have **no recorded run yet**.
+
 ---
 
 ## Layout
@@ -365,7 +390,7 @@ src/
 ├── Horse.Provider.Mormot.WebRequestAdapter.pas   TMormotWebRequest  (thin subclass)
 ├── Horse.Provider.Mormot.WebResponseAdapter.pas  TMormotWebResponse (thin subclass)
 ├── Horse.Provider.Mormot.VCL.pas                  TfrmHorseMormotVCLHost + Delphi VCL marker
-├── Horse.Provider.Mormot.Daemon.pas               Delphi cross-platform daemon (Windows TService / POSIX signals)
+├── Horse.Provider.Mormot.Daemon.pas               Delphi cross-platform daemon (Windows TService with GetServiceController / POSIX signals)
 ├── Horse.Provider.Mormot.FPC.Daemon.pas           FPC Linux daemon (fpSignal handlers)
 ├── Horse.Provider.Mormot.FPC.LCL.pas              Lazarus LCL host form
 └── Horse.Provider.Mormot.FPC.HTTPApplication.pas  FPC HTTPApplication-style runner
