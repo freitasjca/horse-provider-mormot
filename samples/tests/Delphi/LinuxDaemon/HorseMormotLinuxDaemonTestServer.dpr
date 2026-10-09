@@ -18,17 +18,26 @@ program HorseMormotLinuxDaemonTestServer;
   THorse.Listen. SIGTERM signals Stop → drain → exit 0.
 
   Routes: see ..\..\Common\Horse.Mormot.TestRoutes.pas — same 32 surfaces
-  the shared HorseCSTestClient.dpr exercises.
+  HorseMormotTestClient.dpr exercises.
 
   Run sequence (Linux):
     1. Build for Linux64, copy binary + mORMot2 shared libs to the host.
     2. Install the systemd unit file (see ../../README.md §Linux daemon).
     3. sudo systemctl start horsemormot-test-daemon
-    4. Run HorseCSTestClient from any host that can reach port 9010.
+    4. Run HorseMormotTestClient from any host that can reach port 9010.
     5. sudo systemctl stop horsemormot-test-daemon  (SIGTERM → clean drain)
 *)
 
 {$APPTYPE CONSOLE}
+
+// SAMPLE-DEFINE-1 (2026-10-09): every server in this tree starts through
+// THorse.Listen, and THorse is whatever provider Horse.pas selects. Without
+// HORSE_PROVIDER_MORMOT that is Horse's default (Indy on Delphi): the mORMot
+// units still compile, but the sample serves on Indy and a green client run
+// proves nothing about this provider. Fail the build instead.
+{$IF NOT DEFINED(HORSE_PROVIDER_MORMOT)}
+  {$MESSAGE FATAL 'Define HORSE_PROVIDER_MORMOT in Project Options, Conditional defines, All configurations, then Build. Without it this sample serves on Indy, not mORMot.'}
+{$IFEND}
 
 uses
   System.SysUtils,

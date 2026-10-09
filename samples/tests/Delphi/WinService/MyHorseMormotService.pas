@@ -1,4 +1,4 @@
-unit MyHorseMormotService;
+﻿unit MyHorseMormotService;
 
 interface
 
@@ -27,6 +27,11 @@ type
     procedure MyStop (Sender: TService; var Stopped: Boolean);
   public
     constructor Create(AOwner: TComponent); override;
+    // Mandatory for every TService descendant: TService.GetServiceController
+    // is abstract, and TService.Main calls it on the SCM's thread before
+    // OnStart. Without it the service dies at start with EAbstractError =
+    // 0x0EEDFADE = SCM 1067, and no handler here ever sees it (SVC-CTRL-1).
+    function GetServiceController: TServiceController; override;
   end;
 
 var
@@ -74,6 +79,16 @@ end;
 
 { THorseMormotTestService }
 
+procedure ServiceController(CtrlCode: DWord); stdcall;
+begin
+  HorseMormotTestService.Controller(CtrlCode);
+end;
+
+function THorseMormotTestService.GetServiceController: TServiceController;
+begin
+  Result := ServiceController;
+end;
+
 constructor THorseMormotTestService.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
@@ -88,7 +103,7 @@ begin
   WriteDiag('--------------------------------------------------');
   WriteDiag('ServiceCreate entered');
   try
-    Port        := TEST_PORT;             // 9010 — matches HorseCSTestClient
+    Port        := TEST_PORT;             // 9010 — matches HorseMormotTestClient
     Name        := 'HorseMormotTestService';
     DisplayName := 'Horse mORMot2 Integration Test Service';
     RegisterTestRoutes;

@@ -20,10 +20,19 @@ program HorseMormotServiceTestServer;
   Run sequence:
     1. Install:    HorseMormotServiceTestServer.exe /install
     2. Start:      sc start HorseMormotTestService
-    3. Test:       run HorseCSTestClient.exe (targets port 9010).
+    3. Test:       run HorseMormotTestClient.exe (targets port 9010).
     4. Stop:       sc stop HorseMormotTestService    (drains via SEC-30)
     5. Uninstall:  HorseMormotServiceTestServer.exe /uninstall
 }
+
+// SAMPLE-DEFINE-1 (2026-10-09): every server in this tree starts through
+// THorse.Listen, and THorse is whatever provider Horse.pas selects. Without
+// HORSE_PROVIDER_MORMOT that is Horse's default (Indy on Delphi): the mORMot
+// units still compile, but the sample serves on Indy and a green client run
+// proves nothing about this provider. Fail the build instead.
+{$IF NOT DEFINED(HORSE_PROVIDER_MORMOT)}
+  {$MESSAGE FATAL 'Define HORSE_PROVIDER_MORMOT in Project Options, Conditional defines, All configurations, then Build. Without it this sample serves on Indy, not mORMot.'}
+{$IFEND}
 
 uses
   System.SysUtils,
@@ -41,8 +50,10 @@ uses
   Horse.Provider.Mormot.VCL in '..\..\..\..\src\Horse.Provider.Mormot.VCL.pas',
   Horse.Provider.Mormot.WebRequestAdapter in '..\..\..\..\src\Horse.Provider.Mormot.WebRequestAdapter.pas',
   Horse.Provider.Mormot.WebResponseAdapter in '..\..\..\..\src\Horse.Provider.Mormot.WebResponseAdapter.pas',
-  Horse.Provider.RawAdapters in '..\..\..\..\src\Horse.Provider.RawAdapters.pas',
-  Horse.Provider.RawInterfaces in '..\..\..\..\src\Horse.Provider.RawInterfaces.pas';
+  // Horse core units, found through the horse\src search path. They were listed
+  // with an in-path into this repo's src\, where they have never existed (F1026).
+  Horse.Provider.RawAdapters,
+  Horse.Provider.RawInterfaces;
 
 {$R *.res}
 
