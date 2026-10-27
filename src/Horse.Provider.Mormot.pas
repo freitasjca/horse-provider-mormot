@@ -534,9 +534,18 @@ begin
   // into its own acoEnableTls inside the constructor body, so assigning Options
   // afterwards would work for mskThreadPool and quietly fail for mskAsync.
   LUseTls := AConfig.SSLEnabled and (AConfig.ServerKind <> mskHttpApi);
-  LOpts   := [];
+
+  // ── hsoHeadersUnfiltered [FIX-MORMOT-HEADERS-1] ─────────────────────────────
+  // Without it, mORMot2's ParseHeader keeps Content-Length, Content-Type,
+  // Connection, Accept-Encoding, User-Agent, Upgrade, Referer and
+  // Transfer-Encoding out of InHeaders (it only fills its own fields), so
+  // Req.Headers never sees them: middlewares reading Accept-Encoding stop
+  // compressing and loggers lose the user agent. Horse middlewares expect the
+  // full request headers. Passed to the constructor for the same reason as
+  // hsoEnableTls above.
+  LOpts   := [hsoHeadersUnfiltered];
   if LUseTls then
-    LOpts := [hsoEnableTls];
+    Include(LOpts, hsoEnableTls);
 
   // Select the backend. THttpServer / THttpAsyncServer share the
   // THttpServerSocketGeneric.Create(port, onStart, onStop, name, threadPool,
